@@ -1,5 +1,12 @@
 # forwardauth-kit
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/soulteary/forwardauth-kit.svg)](https://pkg.go.dev/github.com/soulteary/forwardauth-kit)
+[![Go Report Card](https://goreportcard.com/badge/github.com/soulteary/forwardauth-kit)](https://goreportcard.com/report/github.com/soulteary/forwardauth-kit)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![codecov](https://codecov.io/gh/soulteary/forwardauth-kit/graph/badge.svg)](https://codecov.io/gh/soulteary/forwardauth-kit)
+
+[中文文档](README_CN.md)
+
 A Go library providing ForwardAuth middleware for reverse proxy authentication. Supports multiple authentication methods and integrates with session management for use with Traefik, Nginx, and other reverse proxies.
 
 ## Features

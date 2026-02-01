@@ -1,5 +1,12 @@
 # forwardauth-kit
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/soulteary/forwardauth-kit.svg)](https://pkg.go.dev/github.com/soulteary/forwardauth-kit)
+[![Go Report Card](https://goreportcard.com/badge/github.com/soulteary/forwardauth-kit)](https://goreportcard.com/report/github.com/soulteary/forwardauth-kit)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![codecov](https://codecov.io/gh/soulteary/forwardauth-kit/graph/badge.svg)](https://codecov.io/gh/soulteary/forwardauth-kit)
+
+[English](README.md)
+
 ForwardAuth 中间件库，用于反向代理认证。支持多种认证方式，与会话管理集成，适用于 Traefik、Nginx 等反向代理。
 
 ## 特性
