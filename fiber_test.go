@@ -57,6 +57,29 @@ func TestFiberContext(t *testing.T) {
 	assert.Equal(t, "response-value", resp.Header.Get("X-Response-Header"))
 }
 
+func TestFiberContext_WithTraceContext(t *testing.T) {
+	app := fiber.New()
+
+	app.Use(func(c *fiber.Ctx) error {
+		// Set trace context in locals (simulating OpenTelemetry middleware)
+		c.Locals("trace_context", c.Context())
+		return c.Next()
+	})
+
+	app.Get("/trace", func(c *fiber.Ctx) error {
+		ctx := NewFiberContext(c)
+		// Context() should return trace_context from locals when available
+		gotCtx := ctx.Context()
+		assert.NotNil(t, gotCtx)
+		return c.SendStatus(200)
+	})
+
+	req := httptest.NewRequest("GET", "/trace", nil)
+	resp, err := app.Test(req)
+	require.NoError(t, err)
+	assert.Equal(t, 200, resp.StatusCode)
+}
+
 func TestFiberContextRedirect(t *testing.T) {
 	app := fiber.New()
 
@@ -272,6 +295,54 @@ func TestFiberMiddlewareWithPasswordAuth(t *testing.T) {
 	assert.Equal(t, 200, resp.StatusCode)
 }
 
+func TestFiberMiddleware_StepUpRequired(t *testing.T) {
+	store := session.New()
+
+	config := &Config{
+		SessionEnabled:   true,
+		StepUpEnabled:    true,
+		StepUpPaths:      []string{"/admin/*"},
+		StepUpSessionKey: "step_up_verified",
+		AuthHost:         "auth.example.com",
+		LoginPath:        "/_login",
+		StepUpURL:        "/_step_up",
+	}
+	handler := NewHandler(config)
+
+	app := fiber.New()
+	// Login route without auth - creates session with auth
+	app.Get("/login", func(c *fiber.Ctx) error {
+		sess, err := store.Get(c)
+		require.NoError(t, err)
+		sess.Set(KeyAuthenticated, true)
+		sess.Set(KeyUserID, "user-1")
+		require.NoError(t, sess.Save())
+		return c.SendString("ok")
+	})
+	// Protected route with step-up - middleware runs here
+	app.Get("/admin/settings", FiberMiddleware(handler, store), func(c *fiber.Ctx) error {
+		return c.SendString("admin")
+	})
+
+	// First get session with auth
+	req := httptest.NewRequest("GET", "/login", nil)
+	resp, err := app.Test(req)
+	require.NoError(t, err)
+	require.Equal(t, 200, resp.StatusCode)
+
+	// Use session cookie for step-up path (no step_up_verified in session)
+	req = httptest.NewRequest("GET", "/admin/settings", nil)
+	req.Header.Set("Accept", "text/html")
+	for _, cookie := range resp.Cookies() {
+		req.AddCookie(cookie)
+	}
+	resp, err = app.Test(req)
+	require.NoError(t, err)
+	// Step-up required -> redirect to step-up URL
+	assert.Equal(t, 302, resp.StatusCode)
+	assert.Contains(t, resp.Header.Get("Location"), "/_step_up")
+}
+
 func TestFiberCookieHelper(t *testing.T) {
 	helper := NewFiberCookieHelper(".example.com", true)
 
@@ -311,6 +382,22 @@ func TestFiberCookieHelper(t *testing.T) {
 	assert.Equal(t, ".example.com", callbackCookie.Domain)
 	assert.True(t, callbackCookie.Secure)
 	assert.True(t, callbackCookie.HttpOnly)
+
+	// Test GetCallbackCookie - send request with cookie
+	req = httptest.NewRequest("GET", "/get-cookie", nil)
+	req.AddCookie(callbackCookie)
+	resp, err = app.Test(req)
+	require.NoError(t, err)
+	assert.Equal(t, 200, resp.StatusCode)
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, "https://app.example.com", string(body))
+
+	// Test GetCallbackCookie - missing cookie returns empty
+	req = httptest.NewRequest("GET", "/get-cookie", nil)
+	resp, err = app.Test(req)
+	require.NoError(t, err)
+	body, _ = io.ReadAll(resp.Body)
+	assert.Empty(t, string(body))
 
 	// Test clear cookie
 	req = httptest.NewRequest("GET", "/clear-cookie", nil)

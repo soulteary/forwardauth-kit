@@ -2,6 +2,7 @@ package forwardauth
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +17,10 @@ type mockSession struct {
 
 func newMockSession() *mockSession {
 	return &mockSession{data: make(map[string]interface{})}
+}
+
+func ptrBool(b bool) *bool {
+	return &b
 }
 
 func (s *mockSession) Get(key string) interface{} {
@@ -140,6 +145,30 @@ func TestPasswordChecker(t *testing.T) {
 			config: &Config{
 				PasswordHeader:    "Stargate-Password",
 				PasswordCheckFunc: func(p string) bool { return p == "custom-secret" },
+			},
+			headerValue: "wrong",
+			wantErr:     ErrInvalidPassword,
+		},
+		{
+			name: "custom normalizer - valid",
+			config: &Config{
+				PasswordHeader: "Stargate-Password",
+				PasswordNormalizer: func(p string) string {
+					return strings.ToLower(strings.TrimSpace(p))
+				},
+				ValidPasswords: []string{"lowercase"},
+			},
+			headerValue: "LowerCase",
+			wantAuth:    true,
+		},
+		{
+			name: "custom normalizer - invalid",
+			config: &Config{
+				PasswordHeader: "Stargate-Password",
+				PasswordNormalizer: func(p string) string {
+					return strings.ToLower(p)
+				},
+				ValidPasswords: []string{"expected"},
 			},
 			headerValue: "wrong",
 			wantErr:     ErrInvalidPassword,
@@ -302,11 +331,12 @@ func TestHeaderCheckerPriority(t *testing.T) {
 
 func TestSessionChecker(t *testing.T) {
 	tests := []struct {
-		name     string
-		config   *Config
-		session  Session // Use interface type to properly handle nil
-		wantAuth bool
-		wantErr  error
+		name             string
+		config           *Config
+		session          Session // Use interface type to properly handle nil
+		wantAuth         bool
+		wantErr          error
+		wantNeedsRefresh *bool // nil = don't check; true/false = assert
 	}{
 		{
 			name:    "nil session",
@@ -359,7 +389,83 @@ func TestSessionChecker(t *testing.T) {
 				s.Set(KeyAuthRefreshedAt, time.Now().Add(-10*time.Minute).Unix())
 				return s
 			}(),
+			wantAuth:         true,
+			wantNeedsRefresh: ptrBool(true),
+		},
+		{
+			name:   "authenticated value not bool",
+			config: &Config{},
+			session: func() Session {
+				s := newMockSession()
+				s.Set(KeyAuthenticated, "true") // wrong type
+				return s
+			}(),
+			wantErr: ErrNotAuthenticated,
+		},
+		{
+			name: "needs refresh - nil lastRefreshVal",
+			config: &Config{
+				AuthRefreshEnabled:  true,
+				AuthRefreshInterval: 5 * time.Minute,
+			},
+			session: func() Session {
+				s := newMockSession()
+				s.Set(KeyAuthenticated, true)
+				// KeyAuthRefreshedAt not set
+				return s
+			}(),
 			wantAuth: true,
+		},
+		{
+			name: "needs refresh - invalid lastRefreshVal type",
+			config: &Config{
+				AuthRefreshEnabled:  true,
+				AuthRefreshInterval: 5 * time.Minute,
+			},
+			session: func() Session {
+				s := newMockSession()
+				s.Set(KeyAuthenticated, true)
+				s.Set(KeyAuthRefreshedAt, "invalid") // wrong type
+				return s
+			}(),
+			wantAuth: true,
+		},
+		{
+			name:   "scopes from []interface{}",
+			config: &Config{},
+			session: func() Session {
+				s := newMockSession()
+				s.Set(KeyAuthenticated, true)
+				s.Set(KeyUserScope, []interface{}{"read", "write"})
+				return s
+			}(),
+			wantAuth: true,
+		},
+		{
+			name:   "AMR from []interface{}",
+			config: &Config{},
+			session: func() Session {
+				s := newMockSession()
+				s.Set(KeyAuthenticated, true)
+				s.Set(KeyUserAMR, []interface{}{"otp", "mfa"})
+				return s
+			}(),
+			wantAuth: true,
+		},
+		{
+			name: "no refresh needed - recent",
+			config: &Config{
+				AuthRefreshEnabled:  true,
+				AuthRefreshInterval: 10 * time.Minute,
+			},
+			session: func() Session {
+				s := newMockSession()
+				s.Set(KeyAuthenticated, true)
+				s.Set(KeyAuthRefreshedAt, time.Now().Unix())
+				return s
+			}(),
+			wantAuth:         true,
+			wantNeedsRefresh: ptrBool(false),
 		},
 	}
 
@@ -392,8 +498,15 @@ func TestSessionChecker(t *testing.T) {
 			}
 
 			// Check refresh flag
-			if tt.config.AuthRefreshEnabled && tt.session != nil && tt.session.Get(KeyAuthRefreshedAt) != nil {
-				assert.True(t, result.NeedsRefresh)
+			if tt.wantNeedsRefresh != nil {
+				assert.Equal(t, *tt.wantNeedsRefresh, result.NeedsRefresh)
+			}
+			// Check scopes/AMR from []interface{}
+			if tt.name == "scopes from []interface{}" {
+				assert.Equal(t, []string{"read", "write"}, result.Scopes)
+			}
+			if tt.name == "AMR from []interface{}" {
+				assert.Equal(t, []string{"otp", "mfa"}, result.AMR)
 			}
 		})
 	}

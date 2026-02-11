@@ -232,3 +232,32 @@ func TestStepUpMatcherMethods(t *testing.T) {
 	disabledMatcher := NewStepUpMatcher(false, []string{"/admin/*"})
 	assert.False(t, disabledMatcher.IsEnabled())
 }
+
+func TestStepUpMatcher_EmptyAndInvalidPatterns(t *testing.T) {
+	tests := []struct {
+		name     string
+		enabled  bool
+		patterns []string
+		wantCnt  int
+	}{
+		{
+			name:     "empty pattern strings skipped",
+			enabled:  true,
+			patterns: []string{"", "  ", "/admin/*", ""},
+			wantCnt:  1,
+		},
+		{
+			name:     "disabled returns zero patterns",
+			enabled:  false,
+			patterns: []string{"/admin/*", "/secure/*"},
+			wantCnt:  0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			matcher := NewStepUpMatcher(tt.enabled, tt.patterns)
+			assert.Equal(t, tt.wantCnt, matcher.PatternCount())
+		})
+	}
+}
