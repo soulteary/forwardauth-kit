@@ -136,6 +136,29 @@ func TestHandlerCheck_StepUpVerified(t *testing.T) {
 	assert.True(t, result.Authenticated)
 }
 
+func TestHandlerCheck_StepUpRequiredWhenSessionNil(t *testing.T) {
+	config := &Config{
+		HeaderAuthEnabled:   true,
+		HeaderAuthUserPhone: "X-User-Phone",
+		HeaderAuthCheckFunc: func(phone, mail string) bool { return true },
+		StepUpEnabled:       true,
+		StepUpPaths:         []string{"/admin/*"},
+		StepUpSessionKey:    "step_up_verified",
+	}
+	handler := NewHandler(config)
+
+	ctx := newMockContext()
+	ctx.path = "/admin/settings"
+	ctx.headers["X-User-Phone"] = "1234567890"
+	// No session - header auth passes but step-up requires session
+
+	result, err := handler.Check(ctx, nil)
+
+	require.Error(t, err)
+	assert.Equal(t, ErrStepUpRequired, err)
+	assert.Nil(t, result)
+}
+
 func TestHandlerCheck_StepUpNotRequiredForPath(t *testing.T) {
 	config := &Config{
 		SessionEnabled:   true,
@@ -593,6 +616,111 @@ func TestHandlerWithLogger(t *testing.T) {
 	require.NotNil(t, result)
 	assert.True(t, result.Authenticated)
 }
+
+func TestHandlerCheck_LoggerOnCheckerFailure(t *testing.T) {
+	logger := &mockLogger{}
+	config := &Config{
+		PasswordEnabled: true,
+		PasswordHeader:  "X-Password",
+		ValidPasswords:  []string{"SECRET"},
+		Logger:          logger,
+	}
+	handler := NewHandler(config)
+
+	ctx := newMockContext()
+	ctx.headers["X-Password"] = "wrong"
+
+	_, err := handler.Check(ctx, nil)
+
+	require.Error(t, err)
+	assert.Equal(t, ErrInvalidPassword, err)
+	assert.Contains(t, logger.messages, "Auth checker failed")
+}
+
+func TestHandlerCheck_LoggerOnAuthSuccess(t *testing.T) {
+	logger := &mockLogger{}
+	config := &Config{
+		SessionEnabled: true,
+		Logger:         logger,
+	}
+	handler := NewHandler(config)
+
+	ctx := newMockContext()
+	sess := newMockSession()
+	sess.Set(KeyAuthenticated, true)
+
+	result, err := handler.Check(ctx, sess)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Contains(t, logger.messages, "Authentication successful")
+}
+
+func TestHandlerCheck_AuthRefreshSaveError(t *testing.T) {
+	logger := &mockLogger{}
+	config := &Config{
+		SessionEnabled:      true,
+		AuthRefreshEnabled:  true,
+		AuthRefreshInterval: 1 * time.Minute,
+		HeaderAuthGetInfoFunc: func(phone, mail string) *UserInfo {
+			return &UserInfo{
+				UserID: "user-123",
+				Scopes: []string{"scope1"},
+				Role:   "admin",
+			}
+		},
+		Logger: logger,
+	}
+	handler := NewHandler(config)
+
+	ctx := newMockContext()
+	sess := &mockSessionWithSaveError{data: map[string]interface{}{
+		KeyAuthenticated:   true,
+		KeyUserPhone:       "1234567890",
+		KeyAuthRefreshedAt: time.Now().Add(-10 * time.Minute).Unix(),
+	}}
+
+	result, err := handler.Check(ctx, sess)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Contains(t, logger.messages, "Failed to save session after auth refresh")
+}
+
+func TestHandlerHandleSessionError_WithTranslateFuncAndLogger(t *testing.T) {
+	logger := &mockLogger{}
+	config := &Config{
+		TranslateFunc: func(c Context, key string) string {
+			if key == "error.session_store_failed" {
+				return "会话存储失败"
+			}
+			return key
+		},
+		Logger: logger,
+	}
+	handler := NewHandler(config)
+
+	ctx := newMockHandlerContext()
+	ctx.headers["Accept"] = "application/json"
+
+	err := handler.HandleSessionError(ctx, ErrSessionStoreError)
+
+	require.NoError(t, err)
+	assert.Equal(t, 500, ctx.statusCode)
+	assert.Contains(t, logger.messages, "Session store error")
+}
+
+// mockSessionWithSaveError implements Session but Save returns error
+type mockSessionWithSaveError struct {
+	data map[string]interface{}
+}
+
+func (s *mockSessionWithSaveError) Get(key string) interface{}        { return s.data[key] }
+func (s *mockSessionWithSaveError) Set(key string, value interface{}) { s.data[key] = value }
+func (s *mockSessionWithSaveError) Delete(key string)                 { delete(s.data, key) }
+func (s *mockSessionWithSaveError) Save() error                       { return ErrSessionStoreError }
+func (s *mockSessionWithSaveError) Destroy() error                    { return nil }
+func (s *mockSessionWithSaveError) ID() string                        { return "test-id" }
 
 // mockLogger implements Logger interface for testing
 type mockLogger struct {

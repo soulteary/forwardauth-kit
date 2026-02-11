@@ -36,6 +36,11 @@ func (b *AuthHeaderBuilder) BuildHeaders(result *AuthResult) map[string]string {
 		headers[b.config.AuthEmailHeader] = result.Email
 	}
 
+	// Set name header
+	if result.Name != "" && b.config.AuthNameHeader != "" {
+		headers[b.config.AuthNameHeader] = result.Name
+	}
+
 	// Set scopes header (comma-separated)
 	if len(result.Scopes) > 0 {
 		headers[b.config.AuthScopesHeader] = strings.Join(result.Scopes, ",")

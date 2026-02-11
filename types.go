@@ -51,6 +51,7 @@ type AuthResult struct {
 	UserID        string
 	Email         string
 	Phone         string
+	Name          string // User display name (optional)
 	Scopes        []string
 	Role          string
 	AMR           []string // Authentication Methods Reference
@@ -91,6 +92,7 @@ type UserInfo struct {
 	UserID   string
 	Email    string
 	Phone    string
+	Name     string // User display name (optional)
 	Scopes   []string
 	Role     string
 	Status   string
@@ -108,6 +110,7 @@ const (
 	KeyUserID          = "user_id"
 	KeyUserMail        = "user_mail"
 	KeyUserPhone       = "user_phone"
+	KeyUserName        = "user_name"
 	KeyUserScope       = "user_scope"
 	KeyUserRole        = "user_role"
 	KeyUserAMR         = "user_amr"

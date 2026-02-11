@@ -112,6 +112,7 @@ func (c *HeaderChecker) Check(ctx Context, sess Session) (*AuthResult, error) {
 					result.UserID = userInfo.UserID
 					result.Email = userInfo.Email
 					result.Phone = userInfo.Phone
+					result.Name = userInfo.Name
 					result.Scopes = userInfo.Scopes
 					result.Role = userInfo.Role
 				}
@@ -185,6 +186,13 @@ func (c *SessionChecker) Check(ctx Context, sess Session) (*AuthResult, error) {
 	if val := sess.Get(KeyUserPhone); val != nil {
 		if phone, ok := val.(string); ok {
 			result.Phone = phone
+		}
+	}
+
+	// Get name
+	if val := sess.Get(KeyUserName); val != nil {
+		if name, ok := val.(string); ok {
+			result.Name = name
 		}
 	}
 

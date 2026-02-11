@@ -43,6 +43,7 @@ type Config struct {
 	UserHeaderName   string // Header name for authenticated user (default: "X-Forwarded-User")
 	AuthUserHeader   string // X-Auth-User header (default: "X-Auth-User")
 	AuthEmailHeader  string // X-Auth-Email header (default: "X-Auth-Email")
+	AuthNameHeader   string // X-Auth-Name header (default: "X-Auth-Name")
 	AuthScopesHeader string // X-Auth-Scopes header (default: "X-Auth-Scopes")
 	AuthRoleHeader   string // X-Auth-Role header (default: "X-Auth-Role")
 	AuthAMRHeader    string // X-Auth-AMR header (default: "X-Auth-AMR")
@@ -113,6 +114,7 @@ func DefaultConfig() Config {
 		UserHeaderName:      "X-Forwarded-User",
 		AuthUserHeader:      "X-Auth-User",
 		AuthEmailHeader:     "X-Auth-Email",
+		AuthNameHeader:      "X-Auth-Name",
 		AuthScopesHeader:    "X-Auth-Scopes",
 		AuthRoleHeader:      "X-Auth-Role",
 		AuthAMRHeader:       "X-Auth-AMR",
@@ -166,6 +168,9 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.AuthEmailHeader == "" {
 		c.AuthEmailHeader = defaults.AuthEmailHeader
+	}
+	if c.AuthNameHeader == "" {
+		c.AuthNameHeader = defaults.AuthNameHeader
 	}
 	if c.AuthScopesHeader == "" {
 		c.AuthScopesHeader = defaults.AuthScopesHeader

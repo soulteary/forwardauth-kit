@@ -152,6 +152,10 @@ func (h *Handler) refreshAuthInfo(c Context, sess Session, result *AuthResult) {
 			sess.Set(KeyUserRole, userInfo.Role)
 			result.Role = userInfo.Role
 		}
+		if userInfo.Name != "" {
+			sess.Set(KeyUserName, userInfo.Name)
+			result.Name = userInfo.Name
+		}
 		sess.Set(KeyAuthRefreshedAt, time.Now().Unix())
 		result.RefreshedAt = time.Now()
 
