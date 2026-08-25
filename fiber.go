@@ -3,17 +3,17 @@ package forwardauth
 import (
 	"context"
 
-	"github.com/gofiber/fiber/v2"
-	fibersession "github.com/gofiber/fiber/v2/middleware/session"
+	"github.com/gofiber/fiber/v3"
+	fibersession "github.com/gofiber/fiber/v3/middleware/session"
 )
 
 // FiberContext wraps a Fiber context to implement the Context interface.
 type FiberContext struct {
-	ctx *fiber.Ctx
+	ctx fiber.Ctx
 }
 
 // NewFiberContext creates a new FiberContext wrapper.
-func NewFiberContext(c *fiber.Ctx) *FiberContext {
+func NewFiberContext(c fiber.Ctx) *FiberContext {
 	return &FiberContext{ctx: c}
 }
 
@@ -29,7 +29,7 @@ func (c *FiberContext) Method() string {
 
 // Protocol returns the request protocol.
 func (c *FiberContext) Protocol() string {
-	return c.ctx.Protocol()
+	return c.ctx.Scheme()
 }
 
 // Hostname returns the request hostname.
@@ -60,9 +60,9 @@ func (c *FiberContext) SendStatus(status int) error {
 // Redirect redirects to the specified location.
 func (c *FiberContext) Redirect(location string, status ...int) error {
 	if len(status) > 0 {
-		return c.ctx.Redirect(location, status[0])
+		return c.ctx.Redirect().Status(status[0]).To(location)
 	}
-	return c.ctx.Redirect(location)
+	return c.ctx.Redirect().Status(fiber.StatusFound).To(location)
 }
 
 // Status sets the response status code.
@@ -102,7 +102,7 @@ func (c *FiberContext) Context() context.Context {
 }
 
 // Underlying returns the underlying fiber.Ctx.
-func (c *FiberContext) Underlying() *fiber.Ctx {
+func (c *FiberContext) Underlying() fiber.Ctx {
 	return c.ctx
 }
 
@@ -185,7 +185,7 @@ func (s *FiberSessionStore) Underlying() *fibersession.Store {
 func FiberMiddleware(handler *Handler, store *fibersession.Store) fiber.Handler {
 	sessionStore := NewFiberSessionStore(store)
 
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		ctx := NewFiberContext(c)
 
 		// Get session
@@ -238,7 +238,7 @@ func NewFiberCookieHelper(cookieDomain string, secure bool) *FiberCookieHelper {
 }
 
 // SetCallbackCookie sets a callback cookie for cross-domain authentication.
-func (h *FiberCookieHelper) SetCallbackCookie(c *fiber.Ctx, name, value string, maxAge int) {
+func (h *FiberCookieHelper) SetCallbackCookie(c fiber.Ctx, name, value string, maxAge int) {
 	cookie := &fiber.Cookie{
 		Name:     name,
 		Value:    value,
@@ -256,7 +256,7 @@ func (h *FiberCookieHelper) SetCallbackCookie(c *fiber.Ctx, name, value string, 
 }
 
 // ClearCallbackCookie clears a callback cookie.
-func (h *FiberCookieHelper) ClearCallbackCookie(c *fiber.Ctx, name string) {
+func (h *FiberCookieHelper) ClearCallbackCookie(c fiber.Ctx, name string) {
 	cookie := &fiber.Cookie{
 		Name:     name,
 		Value:    "",
@@ -273,6 +273,6 @@ func (h *FiberCookieHelper) ClearCallbackCookie(c *fiber.Ctx, name string) {
 }
 
 // GetCallbackCookie retrieves a callback cookie value.
-func (h *FiberCookieHelper) GetCallbackCookie(c *fiber.Ctx, name string) string {
+func (h *FiberCookieHelper) GetCallbackCookie(c fiber.Ctx, name string) string {
 	return c.Cookies(name)
 }

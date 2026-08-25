@@ -1,6 +1,6 @@
 # forwardauth-kit
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/soulteary/forwardauth-kit.svg)](https://pkg.go.dev/github.com/soulteary/forwardauth-kit)
+[![Go Reference](https://pkg.go.dev/badge/github.com/soulteary/forwardauth-kit/v2.svg)](https://pkg.go.dev/github.com/soulteary/forwardauth-kit/v2)
 [![Go Report Card](.github/goreportcard.svg)](.github/goreportcard-report.md)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![codecov](https://codecov.io/gh/soulteary/forwardauth-kit/graph/badge.svg)](https://codecov.io/gh/soulteary/forwardauth-kit)
@@ -22,8 +22,10 @@ A Go library providing ForwardAuth middleware for reverse proxy authentication. 
 ## Installation
 
 ```bash
-go get github.com/soulteary/forwardauth-kit
+go get github.com/soulteary/forwardauth-kit/v2
 ```
+
+Fiber integrations require Fiber v3.4.0 or later. Applications that still use Fiber v2 should remain on `github.com/soulteary/forwardauth-kit` v1.
 
 ## Quick Start
 
@@ -33,14 +35,14 @@ go get github.com/soulteary/forwardauth-kit
 package main
 
 import (
-    "github.com/gofiber/fiber/v2"
-    "github.com/gofiber/fiber/v2/middleware/session"
-    forwardauth "github.com/soulteary/forwardauth-kit"
+    "github.com/gofiber/fiber/v3"
+    "github.com/gofiber/fiber/v3/middleware/session"
+    forwardauth "github.com/soulteary/forwardauth-kit/v2"
 )
 
 func main() {
     app := fiber.New()
-    store := session.New()
+    store := session.NewStore()
 
     // Configure ForwardAuth
     config := forwardauth.Config{
