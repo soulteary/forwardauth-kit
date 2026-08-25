@@ -1,7 +1,7 @@
 # forwardauth-kit
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/soulteary/forwardauth-kit.svg)](https://pkg.go.dev/github.com/soulteary/forwardauth-kit)
-[![Go Report Card](https://goreportcard.com/badge/github.com/soulteary/forwardauth-kit)](https://goreportcard.com/report/github.com/soulteary/forwardauth-kit)
+[![Go Reference](https://pkg.go.dev/badge/github.com/soulteary/forwardauth-kit/v2.svg)](https://pkg.go.dev/github.com/soulteary/forwardauth-kit/v2)
+[![Go Report Card](https://goreportcard.com/badge/github.com/soulteary/forwardauth-kit/v2)](https://goreportcard.com/report/github.com/soulteary/forwardauth-kit/v2)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![codecov](https://codecov.io/gh/soulteary/forwardauth-kit/graph/badge.svg)](https://codecov.io/gh/soulteary/forwardauth-kit)
 
@@ -22,8 +22,10 @@ ForwardAuth 中间件库，用于反向代理认证。支持多种认证方式�
 ## 安装
 
 ```bash
-go get github.com/soulteary/forwardauth-kit
+go get github.com/soulteary/forwardauth-kit/v2
 ```
+
+Fiber 集成要求 Fiber v3.4.0 或更高版本。仍使用 Fiber v2 的应用应继续使用 `github.com/soulteary/forwardauth-kit` v1。
 
 ## 快速开始
 
@@ -33,14 +35,14 @@ go get github.com/soulteary/forwardauth-kit
 package main
 
 import (
-    "github.com/gofiber/fiber/v2"
-    "github.com/gofiber/fiber/v2/middleware/session"
-    forwardauth "github.com/soulteary/forwardauth-kit"
+    "github.com/gofiber/fiber/v3"
+    "github.com/gofiber/fiber/v3/middleware/session"
+    forwardauth "github.com/soulteary/forwardauth-kit/v2"
 )
 
 func main() {
     app := fiber.New()
-    store := session.New()
+    store := session.NewStore()
 
     // 配置 ForwardAuth
     config := forwardauth.Config{

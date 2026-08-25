@@ -6,8 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/session"
+	"github.com/gofiber/fiber/v3"
+	"github.com/gofiber/fiber/v3/middleware/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -15,7 +15,7 @@ import (
 func TestFiberContext(t *testing.T) {
 	app := fiber.New()
 
-	app.Get("/test", func(c *fiber.Ctx) error {
+	app.Get("/test", func(c fiber.Ctx) error {
 		ctx := NewFiberContext(c)
 
 		// Test basic methods
@@ -60,13 +60,13 @@ func TestFiberContext(t *testing.T) {
 func TestFiberContext_WithTraceContext(t *testing.T) {
 	app := fiber.New()
 
-	app.Use(func(c *fiber.Ctx) error {
+	app.Use(func(c fiber.Ctx) error {
 		// Set trace context in locals (simulating OpenTelemetry middleware)
 		c.Locals("trace_context", c.Context())
 		return c.Next()
 	})
 
-	app.Get("/trace", func(c *fiber.Ctx) error {
+	app.Get("/trace", func(c fiber.Ctx) error {
 		ctx := NewFiberContext(c)
 		// Context() should return trace_context from locals when available
 		gotCtx := ctx.Context()
@@ -83,7 +83,7 @@ func TestFiberContext_WithTraceContext(t *testing.T) {
 func TestFiberContextRedirect(t *testing.T) {
 	app := fiber.New()
 
-	app.Get("/redirect", func(c *fiber.Ctx) error {
+	app.Get("/redirect", func(c fiber.Ctx) error {
 		ctx := NewFiberContext(c)
 		return ctx.Redirect("/target", 302)
 	})
@@ -98,7 +98,7 @@ func TestFiberContextRedirect(t *testing.T) {
 func TestFiberContextJSON(t *testing.T) {
 	app := fiber.New()
 
-	app.Get("/json", func(c *fiber.Ctx) error {
+	app.Get("/json", func(c fiber.Ctx) error {
 		ctx := NewFiberContext(c)
 		return ctx.Status(200).JSON(map[string]string{"key": "value"})
 	})
@@ -115,7 +115,7 @@ func TestFiberContextJSON(t *testing.T) {
 func TestFiberContextSendString(t *testing.T) {
 	app := fiber.New()
 
-	app.Get("/string", func(c *fiber.Ctx) error {
+	app.Get("/string", func(c fiber.Ctx) error {
 		ctx := NewFiberContext(c)
 		return ctx.Status(200).SendString("Hello World")
 	})
@@ -130,10 +130,10 @@ func TestFiberContextSendString(t *testing.T) {
 }
 
 func TestFiberSession(t *testing.T) {
-	store := session.New()
+	store := session.NewStore()
 	app := fiber.New()
 
-	app.Get("/session", func(c *fiber.Ctx) error {
+	app.Get("/session", func(c fiber.Ctx) error {
 		sess, err := store.Get(c)
 		require.NoError(t, err)
 
@@ -168,10 +168,10 @@ func TestFiberSession(t *testing.T) {
 }
 
 func TestFiberSessionDestroy(t *testing.T) {
-	store := session.New()
+	store := session.NewStore()
 	app := fiber.New()
 
-	app.Get("/destroy", func(c *fiber.Ctx) error {
+	app.Get("/destroy", func(c fiber.Ctx) error {
 		sess, err := store.Get(c)
 		require.NoError(t, err)
 
@@ -191,12 +191,12 @@ func TestFiberSessionDestroy(t *testing.T) {
 }
 
 func TestFiberSessionStore(t *testing.T) {
-	store := session.New()
+	store := session.NewStore()
 	fiberStore := NewFiberSessionStore(store)
 
 	app := fiber.New()
 
-	app.Get("/store", func(c *fiber.Ctx) error {
+	app.Get("/store", func(c fiber.Ctx) error {
 		ctx := NewFiberContext(c)
 
 		sess, err := fiberStore.Get(ctx)
@@ -219,7 +219,7 @@ func TestFiberSessionStore(t *testing.T) {
 }
 
 func TestFiberSessionStoreInvalidContext(t *testing.T) {
-	store := session.New()
+	store := session.NewStore()
 	fiberStore := NewFiberSessionStore(store)
 
 	// Use mock context instead of FiberContext
@@ -230,7 +230,7 @@ func TestFiberSessionStoreInvalidContext(t *testing.T) {
 }
 
 func TestFiberMiddleware(t *testing.T) {
-	store := session.New()
+	store := session.NewStore()
 
 	config := &Config{
 		SessionEnabled: true,
@@ -241,7 +241,7 @@ func TestFiberMiddleware(t *testing.T) {
 
 	app := fiber.New()
 	app.Use(FiberMiddleware(handler, store))
-	app.Get("/protected", func(c *fiber.Ctx) error {
+	app.Get("/protected", func(c fiber.Ctx) error {
 		return c.SendString("Protected content")
 	})
 
@@ -254,7 +254,7 @@ func TestFiberMiddleware(t *testing.T) {
 }
 
 func TestFiberCheckRoute(t *testing.T) {
-	store := session.New()
+	store := session.NewStore()
 
 	config := &Config{
 		SessionEnabled: true,
@@ -275,7 +275,7 @@ func TestFiberCheckRoute(t *testing.T) {
 }
 
 func TestFiberMiddlewareWithPasswordAuth(t *testing.T) {
-	store := session.New()
+	store := session.NewStore()
 
 	config := &Config{
 		PasswordEnabled: true,
@@ -296,7 +296,7 @@ func TestFiberMiddlewareWithPasswordAuth(t *testing.T) {
 }
 
 func TestFiberMiddleware_StepUpRequired(t *testing.T) {
-	store := session.New()
+	store := session.NewStore()
 
 	config := &Config{
 		SessionEnabled:   true,
@@ -311,7 +311,7 @@ func TestFiberMiddleware_StepUpRequired(t *testing.T) {
 
 	app := fiber.New()
 	// Login route without auth - creates session with auth
-	app.Get("/login", func(c *fiber.Ctx) error {
+	app.Get("/login", func(c fiber.Ctx) error {
 		sess, err := store.Get(c)
 		require.NoError(t, err)
 		sess.Set(KeyAuthenticated, true)
@@ -320,7 +320,7 @@ func TestFiberMiddleware_StepUpRequired(t *testing.T) {
 		return c.SendString("ok")
 	})
 	// Protected route with step-up - middleware runs here
-	app.Get("/admin/settings", FiberMiddleware(handler, store), func(c *fiber.Ctx) error {
+	app.Get("/admin/settings", FiberMiddleware(handler, store), func(c fiber.Ctx) error {
 		return c.SendString("admin")
 	})
 
@@ -348,17 +348,17 @@ func TestFiberCookieHelper(t *testing.T) {
 
 	app := fiber.New()
 
-	app.Get("/set-cookie", func(c *fiber.Ctx) error {
+	app.Get("/set-cookie", func(c fiber.Ctx) error {
 		helper.SetCallbackCookie(c, "callback", "https://app.example.com", 600)
 		return c.SendStatus(200)
 	})
 
-	app.Get("/get-cookie", func(c *fiber.Ctx) error {
+	app.Get("/get-cookie", func(c fiber.Ctx) error {
 		value := helper.GetCallbackCookie(c, "callback")
 		return c.SendString(value)
 	})
 
-	app.Get("/clear-cookie", func(c *fiber.Ctx) error {
+	app.Get("/clear-cookie", func(c fiber.Ctx) error {
 		helper.ClearCallbackCookie(c, "callback")
 		return c.SendStatus(200)
 	})
@@ -411,7 +411,7 @@ func TestFiberCookieHelperWithoutDomain(t *testing.T) {
 
 	app := fiber.New()
 
-	app.Get("/set-cookie", func(c *fiber.Ctx) error {
+	app.Get("/set-cookie", func(c fiber.Ctx) error {
 		helper.SetCallbackCookie(c, "test", "value", 300)
 		return c.SendStatus(200)
 	})
