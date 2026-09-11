@@ -81,9 +81,14 @@ config := forwardauth.Config{
     HeaderAuthUserMail:  "X-User-Mail",
 
     // 必填。身份 Header 只是"声明"而非凭证：任何能访问到本接口的调用方都能设置它们。
-    // 需要明确指定哪些请求可以信任，通常是"仅来自反向代理"：
+    // 需要明确指定哪些请求可以信任。
+    //
+    // 应当校验"只有代理才能产生"的东西，例如代理注入的共享密钥；
+    // 仅凭网络对端地址是不够的：请求由代理转发，并不能说明 X-User-Phone
+    // 是谁写的——除非代理被显式配置为清除它。下方 nginx 示例两件事都做了。
     HeaderAuthTrustFunc: func(c forwardauth.Context) bool {
-        return c.Get("X-Forwarded-For") != "" && trustedProxy(c.RemoteIP())
+        return subtle.ConstantTimeCompare(
+            []byte(c.Get("X-Proxy-Secret")), []byte(proxySecret)) == 1
     },
     // ……或显式声明接受任意来源的 Header——仅当除代理外无人能访问本接口时才安全：
     //   HeaderAuthAllowUntrustedHeaders: true,
@@ -272,8 +277,23 @@ location = /_auth {
     proxy_set_header X-Forwarded-Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-Uri $request_uri;
+
+    # HeaderAuthTrustFunc 校验的密钥。不要放在面向客户端的 location 中，
+    # 否则客户端自己就能发送它。
+    proxy_set_header X-Proxy-Secret $proxy_secret;
+
+    # 必须清除身份 Header。否则客户端可以自带 X-User-Phone / X-User-Mail，
+    # nginx 原样转发，信任校验随之通过——而这个身份是客户端伪造的。
+    # 请用你自己确定的值覆盖它们，或者置空。
+    proxy_set_header X-User-Phone "";
+    proxy_set_header X-User-Mail "";
 }
 ```
+
+`X-Forwarded-For` 同样由客户端可控：nginx 是在已有值后面追加，前面的条目
+都是客户端自己填的。需要对端地址时请使用 `$remote_addr` 而非该 Header；
+另外 `forwardauth.Context` 并不暴露对端地址，这类校验需要在进入 handler
+之前、在你的适配层完成。
 
 ## 许可证
 

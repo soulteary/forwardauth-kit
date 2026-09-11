@@ -300,5 +300,17 @@ func (h *Handler) stepUpRequiredFor(c Context) bool {
 	if forwarded != "" && !h.config.StepUpForwardedURITrusted {
 		return true
 	}
-	return h.stepUpMatcher.RequiresStepUp(forwardedPath(h.forwarded.GetURI(c)))
+	// Both spellings: the bytes as forwarded, and the decoded/cleaned path a
+	// downstream router routes on. Either one matching means step-up, so an
+	// encoded "/%61dmin/settings" cannot slip past a "/admin/*" pattern that
+	// the router itself will honour.
+	uri := h.forwarded.GetURI(c)
+	raw := forwardedPath(uri)
+	if h.stepUpMatcher.RequiresStepUp(raw) {
+		return true
+	}
+	if canonical := canonicalForwardedPath(uri); canonical != raw {
+		return h.stepUpMatcher.RequiresStepUp(canonical)
+	}
+	return false
 }

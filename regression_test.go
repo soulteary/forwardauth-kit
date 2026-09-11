@@ -1,6 +1,7 @@
 package forwardauth
 
 import (
+	"crypto/subtle"
 	"errors"
 	"strings"
 	"testing"
@@ -335,5 +336,87 @@ func TestUntrustedForwardedURICannotSkipStepUp(t *testing.T) {
 	bare.path = "/public"
 	if _, err := newHandler(false).Check(bare, authed()); errors.Is(err, ErrStepUpRequired) {
 		t.Error("step-up fired on an unprotected path with no forwarded header")
+	}
+}
+
+// TestStepUpMatchesEncodedForwardedPath is the regression test for matching
+// the forwarded URI byte-for-byte. A router decodes percent-escapes before
+// routing -- net/http's ServeMux dispatches on the decoded URL.Path -- so
+// "/%61dmin/settings" reaches the /admin handler while a "/admin/*" step-up
+// pattern saw a path that started with "%61" and let the request through.
+func TestStepUpMatchesEncodedForwardedPath(t *testing.T) {
+	sess := newMockSession()
+	sess.data[KeyAuthenticated] = true
+
+	h := NewHandler(&Config{
+		SessionEnabled:            true,
+		StepUpEnabled:             true,
+		StepUpForwardedURITrusted: true,
+		StepUpPaths:               []string{"/admin/*"},
+	})
+
+	for _, uri := range []string{
+		"/%61dmin/settings",          // the first letter escaped
+		"/%61dmin/settings?tab=keys", // and with a query, as $request_uri sends
+		"/admin/./settings",          // a dot segment
+		"/public/../admin/settings",  // and a traversal
+	} {
+		t.Run(uri, func(t *testing.T) {
+			ctx := newMockContext()
+			ctx.path = "/_auth"
+			ctx.headers["X-Forwarded-Uri"] = uri
+
+			if _, err := h.Check(ctx, sess); err != ErrStepUpRequired {
+				t.Errorf("Check() = %v, want ErrStepUpRequired; the router routes this to /admin", err)
+			}
+		})
+	}
+
+	// Decoding must not start demanding step-up for unprotected paths.
+	ctx := newMockContext()
+	ctx.path = "/_auth"
+	ctx.headers["X-Forwarded-Uri"] = "/public/%70age?x=1"
+	if _, err := h.Check(ctx, sess); err != nil {
+		t.Errorf("Check() = %v, want success for an unprotected forwarded URI", err)
+	}
+}
+
+// TestDocumentedHeaderAuthConfigCompiles pins the README's primary header-auth
+// example to the actual API and to what it claims to do.
+//
+// The previous revision's example called c.RemoteIP(), which
+// forwardauth.Context does not have, so the documented setup did not compile.
+// It also rested on the network peer, which does not establish where
+// X-User-Phone came from: the proxy forwards whatever the client sent unless
+// it is configured to clear it. Checking a secret only the proxy can inject
+// does establish it, and is what both READMEs now show.
+func TestDocumentedHeaderAuthConfigCompiles(t *testing.T) {
+	const proxySecret = "s3cr3t"
+
+	h := NewHandler(&Config{
+		HeaderAuthEnabled:   true,
+		HeaderAuthUserPhone: "X-User-Phone",
+		HeaderAuthUserMail:  "X-User-Mail",
+		HeaderAuthTrustFunc: func(c Context) bool {
+			return subtle.ConstantTimeCompare(
+				[]byte(c.Get("X-Proxy-Secret")), []byte(proxySecret)) == 1
+		},
+		HeaderAuthCheckFunc: func(phone, mail string) bool {
+			return phone == "13800000000"
+		},
+	})
+
+	trusted := newMockContext()
+	trusted.headers["X-Proxy-Secret"] = proxySecret
+	trusted.headers["X-User-Phone"] = "13800000000"
+	if _, err := h.Check(trusted, nil); err != nil {
+		t.Errorf("Check() = %v, want success for headers carrying the proxy's secret", err)
+	}
+
+	// The same identity headers, straight from a client.
+	forged := newMockContext()
+	forged.headers["X-User-Phone"] = "13800000000"
+	if _, err := h.Check(forged, nil); err == nil {
+		t.Error("identity headers without the proxy's secret were believed")
 	}
 }

@@ -82,9 +82,16 @@ config := forwardauth.Config{
 
     // REQUIRED. The identity headers are a claim, not a credential: anything
     // that can reach this endpoint can set them. Say which requests may be
-    // believed -- normally "only from the proxy":
+    // believed.
+    //
+    // Check something only the proxy can produce. A shared secret it injects
+    // works; the network peer alone does NOT, because being connected by the
+    // proxy says nothing about who wrote X-User-Phone -- the proxy forwards
+    // whatever the client sent unless it is configured to clear it. See the
+    // nginx example below, which does both halves.
     HeaderAuthTrustFunc: func(c forwardauth.Context) bool {
-        return c.Get("X-Forwarded-For") != "" && trustedProxy(c.RemoteIP())
+        return subtle.ConstantTimeCompare(
+            []byte(c.Get("X-Proxy-Secret")), []byte(proxySecret)) == 1
     },
     // ...or acknowledge explicitly that any caller may supply them, which is
     // only safe when nothing but the proxy can reach this endpoint at all:
@@ -278,8 +285,25 @@ location = /_auth {
     proxy_set_header X-Forwarded-Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-Uri $request_uri;
+
+    # The secret HeaderAuthTrustFunc checks. Keep it out of the client-facing
+    # location block so a client can never send it.
+    proxy_set_header X-Proxy-Secret $proxy_secret;
+
+    # CLEAR the identity headers. Without this the client supplies its own
+    # X-User-Phone / X-User-Mail, nginx forwards them unchanged, and the
+    # trust check passes on a request whose identity the client forged.
+    # Overwrite them from something you established yourself, or empty them.
+    proxy_set_header X-User-Phone "";
+    proxy_set_header X-User-Mail "";
 }
 ```
+
+`X-Forwarded-For` is client-supplied too: nginx APPENDS to whatever arrived, so
+its leading entries are whatever the client chose. Use `$remote_addr`, not the
+header, if you need the peer address -- and note that `forwardauth.Context`
+does not expose it, so a peer-address check has to happen in your adapter
+before the handler runs.
 
 ## License
 

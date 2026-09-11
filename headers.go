@@ -3,6 +3,8 @@ package forwardauth
 import (
 	"fmt"
 	"net"
+	"net/url"
+	"path"
 	"strings"
 )
 
@@ -141,6 +143,33 @@ func forwardedPath(uri string) string {
 		uri = uri[:i]
 	}
 	return uri
+}
+
+// canonicalForwardedPath returns forwardedPath's result with percent-escapes
+// decoded and "." / ".." segments collapsed -- the spelling a downstream
+// router actually routes on.
+//
+// "/%61dmin/settings" is not "/admin/settings" to a matcher comparing bytes,
+// but net/http's ServeMux routes on the decoded URL.Path and sends it to the
+// /admin handler, so a step-up pattern of "/admin/*" was walked straight past.
+//
+// stepUpRequiredFor matches BOTH this and the raw spelling, so decoding can
+// only ever add matches, never silence one that used to fire. An escape
+// sequence this cannot decode is left alone for the same reason.
+func canonicalForwardedPath(uri string) string {
+	p := forwardedPath(uri)
+	if p == "" {
+		return p
+	}
+	if decoded, err := url.PathUnescape(p); err == nil {
+		p = decoded
+	}
+	cleaned := path.Clean(p)
+	// path.Clean drops a trailing slash, which a pattern may distinguish.
+	if strings.HasSuffix(p, "/") && !strings.HasSuffix(cleaned, "/") {
+		cleaned += "/"
+	}
+	return cleaned
 }
 
 // GetProto returns the forwarded protocol from the request.
