@@ -97,7 +97,7 @@ func (h *Handler) Check(c Context, sess Session) (*AuthResult, error) {
 	// README's own nginx config) and passes the real target in X-Forwarded-Uri,
 	// so matching c.Path() compared the patterns against "/_auth" every time
 	// and never fired. Step-up was configured and silently inert.
-	if h.stepUpMatcher != nil && h.stepUpMatcher.RequiresStepUp(h.forwarded.GetURI(c)) {
+	if h.stepUpMatcher != nil && h.stepUpMatcher.RequiresStepUp(forwardedPath(h.forwarded.GetURI(c))) {
 		if sess == nil {
 			return nil, ErrStepUpRequired
 		}
@@ -158,8 +158,16 @@ func (h *Handler) refreshAuthInfo(c Context, sess Session, result *AuthResult) {
 		result.Scopes = userInfo.Scopes
 		sess.Set(KeyUserRole, userInfo.Role)
 		result.Role = userInfo.Role
-		sess.Set(KeyUserName, userInfo.Name)
-		result.Name = userInfo.Name
+		// Name is explicitly optional, unlike Scopes and Role: a refresh
+		// callback that returns only authorization data legitimately leaves it
+		// empty. Replacing it unconditionally erased KeyUserName -- and with
+		// it the X-Auth-Name header -- after the first refresh. Only scopes and
+		// role need replace semantics, because that is what revocation looks
+		// like.
+		if userInfo.Name != "" {
+			sess.Set(KeyUserName, userInfo.Name)
+			result.Name = userInfo.Name
+		}
 		sess.Set(KeyAuthRefreshedAt, time.Now().Unix())
 		result.RefreshedAt = time.Now()
 

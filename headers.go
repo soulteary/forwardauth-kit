@@ -121,6 +121,28 @@ func (ForwardedHeaders) GetURI(c Context) string {
 	return c.Path()
 }
 
+// forwardedPath returns just the path component of a forwarded URI.
+//
+// X-Forwarded-Uri commonly carries the query string -- the README's own nginx
+// configuration passes $request_uri, which does. A path matcher anchored at
+// both ends therefore failed to match "/settings/security?tab=password"
+// against "/settings/security", so a protected route silently skipped its
+// check whenever a query parameter was present.
+func forwardedPath(uri string) string {
+	if uri == "" {
+		return uri
+	}
+	// Strip the fragment first: a query may follow it in a malformed value,
+	// and neither belongs to the path.
+	if i := strings.IndexByte(uri, '#'); i >= 0 {
+		uri = uri[:i]
+	}
+	if i := strings.IndexByte(uri, '?'); i >= 0 {
+		uri = uri[:i]
+	}
+	return uri
+}
+
 // GetProto returns the forwarded protocol from the request.
 // It prioritizes the X-Forwarded-Proto header if present.
 func (ForwardedHeaders) GetProto(c Context) string {

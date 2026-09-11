@@ -97,8 +97,19 @@ func NewHeaderChecker(config *Config) *HeaderChecker {
 func (c *HeaderChecker) Check(ctx Context, sess Session) (*AuthResult, error) {
 	// The identity headers are a claim, not a credential: refuse them unless
 	// the deployment has said they can be trusted on this request.
-	if c.config.HeaderAuthTrustFunc != nil && !c.config.HeaderAuthTrustFunc(ctx) {
-		return nil, nil // skip this checker
+	//
+	// A nil HeaderAuthTrustFunc is not permission -- it is the absence of a
+	// decision. Config.Validate rejects that combination, but nothing forces a
+	// caller to run it (NewHandler does not), so the check has to live here
+	// too or the default runtime path goes on accepting client-supplied
+	// identity headers.
+	switch {
+	case c.config.HeaderAuthTrustFunc != nil:
+		if !c.config.HeaderAuthTrustFunc(ctx) {
+			return nil, nil // not a trusted hop; skip this checker
+		}
+	case !c.config.HeaderAuthAllowUntrustedHeaders:
+		return nil, ErrHeaderAuthTrustUnspecified
 	}
 
 	phone := ctx.Get(c.config.HeaderAuthUserPhone)

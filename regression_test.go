@@ -1,6 +1,7 @@
 package forwardauth
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -150,5 +151,138 @@ func TestNormalizeHostHandlesIPv6(t *testing.T) {
 		if got := NormalizeHost(in); got != want {
 			t.Errorf("NormalizeHost(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// --- Codex review follow-ups (PR #4) ---
+
+// TestStepUpMatchesForwardedPathWithQuery is the regression test for matching
+// the raw X-Forwarded-Uri. The README's own nginx configuration passes
+// $request_uri, which carries the query string, and StepUpMatcher anchors its
+// pattern at both ends -- so an exact protected route such as
+// /settings/security skipped step-up entirely whenever a query parameter was
+// present.
+func TestStepUpMatchesForwardedPathWithQuery(t *testing.T) {
+	config := &Config{
+		HeaderAuthEnabled:               true,
+		HeaderAuthUserPhone:             "X-User-Phone",
+		HeaderAuthAllowUntrustedHeaders: true,
+		HeaderAuthCheckFunc:             func(string, string) bool { return true },
+		StepUpEnabled:                   true,
+		StepUpPaths:                     []string{"/settings/security"},
+		StepUpSessionKey:                "step_up_verified",
+	}
+	handler := NewHandler(config)
+
+	for _, uri := range []string{
+		"/settings/security",
+		"/settings/security?tab=password",
+		"/settings/security?a=1&b=2",
+		"/settings/security#frag",
+	} {
+		ctx := newMockContext()
+		ctx.headers["X-User-Phone"] = "1234567890"
+		ctx.headers["X-Forwarded-Uri"] = uri
+
+		_, err := handler.Check(ctx, nil)
+		if !errors.Is(err, ErrStepUpRequired) {
+			t.Errorf("X-Forwarded-Uri %q: err = %v, want ErrStepUpRequired -- step-up was skipped", uri, err)
+		}
+	}
+
+	// An unprotected route is still unaffected.
+	ctx := newMockContext()
+	ctx.headers["X-User-Phone"] = "1234567890"
+	ctx.headers["X-Forwarded-Uri"] = "/settings/profile?tab=password"
+	if _, err := handler.Check(ctx, nil); errors.Is(err, ErrStepUpRequired) {
+		t.Error("step-up fired on an unprotected route")
+	}
+}
+
+// TestHeaderCheckerRefusesWithoutATrustDecision is the regression test for the
+// trust gate living only in Config.Validate. Nothing forces a caller to run
+// Validate -- NewHandler does not -- so a nil HeaderAuthTrustFunc meant the
+// runtime path went on accepting client-supplied identity headers, which is
+// exactly what the explicit-trust requirement was added to stop.
+func TestHeaderCheckerRefusesWithoutATrustDecision(t *testing.T) {
+	base := func() *Config {
+		return &Config{
+			HeaderAuthEnabled:   true,
+			HeaderAuthUserPhone: "X-User-Phone",
+			HeaderAuthCheckFunc: func(string, string) bool { return true },
+		}
+	}
+
+	// No trust decision at all: refuse.
+	ctx := newMockContext()
+	ctx.headers["X-User-Phone"] = "1234567890"
+	_, err := NewHeaderChecker(base()).Check(ctx, nil)
+	if !errors.Is(err, ErrHeaderAuthTrustUnspecified) {
+		t.Errorf("Check() err = %v, want ErrHeaderAuthTrustUnspecified -- client headers were accepted by default", err)
+	}
+
+	// Explicitly acknowledged: accepted.
+	cfg := base()
+	cfg.HeaderAuthAllowUntrustedHeaders = true
+	ctx = newMockContext()
+	ctx.headers["X-User-Phone"] = "1234567890"
+	res, err := NewHeaderChecker(cfg).Check(ctx, nil)
+	if err != nil || res == nil || !res.Authenticated {
+		t.Errorf("with HeaderAuthAllowUntrustedHeaders: (%v, %v), want an authenticated result", res, err)
+	}
+
+	// A trust function is consulted, and its refusal skips rather than errors.
+	cfg = base()
+	cfg.HeaderAuthTrustFunc = func(Context) bool { return false }
+	ctx = newMockContext()
+	ctx.headers["X-User-Phone"] = "1234567890"
+	res, err = NewHeaderChecker(cfg).Check(ctx, nil)
+	if err != nil || res != nil {
+		t.Errorf("untrusted hop: (%v, %v), want the checker skipped", res, err)
+	}
+}
+
+// TestRefreshKeepsAnOmittedName: UserInfo.Name is explicitly optional, so a
+// refresh callback returning only scopes and role legitimately leaves it
+// empty. Replacing it unconditionally erased KeyUserName -- and the
+// X-Auth-Name header with it -- after the first refresh.
+func TestRefreshKeepsAnOmittedName(t *testing.T) {
+	sess := newMockSession()
+	sess.Set(KeyUserName, "Ada Lovelace")
+	sess.Set(KeyUserScope, []string{"read", "write"})
+	sess.Set(KeyUserRole, "admin")
+	sess.Set(KeyUserPhone, "1234567890")
+
+	config := &Config{
+		HeaderAuthEnabled:               true,
+		HeaderAuthUserPhone:             "X-User-Phone",
+		HeaderAuthAllowUntrustedHeaders: true,
+		HeaderAuthCheckFunc:             func(string, string) bool { return true },
+		HeaderAuthGetInfoFunc: func(string, string) *UserInfo {
+			// Authorization-only refresh: no Name.
+			return &UserInfo{Scopes: []string{"read"}, Role: "user"}
+		},
+	}
+	handler := NewHandler(config)
+
+	ctx := newMockContext()
+	ctx.headers["X-User-Phone"] = "1234567890"
+
+	result := &AuthResult{Authenticated: true, NeedsRefresh: true}
+	handler.refreshAuthInfo(ctx, sess, result)
+
+	if got := sess.Get(KeyUserName); got != "Ada Lovelace" {
+		t.Errorf("KeyUserName = %v after an authorization-only refresh, want it preserved", got)
+	}
+	if result.Name != "" && result.Name != "Ada Lovelace" {
+		t.Errorf("result.Name = %q, want the existing name untouched", result.Name)
+	}
+
+	// Revocation semantics for scopes and role are unchanged.
+	if got, ok := sess.Get(KeyUserScope).([]string); !ok || len(got) != 1 || got[0] != "read" {
+		t.Errorf("KeyUserScope = %v, want the refreshed [read]", sess.Get(KeyUserScope))
+	}
+	if got := sess.Get(KeyUserRole); got != "user" {
+		t.Errorf("KeyUserRole = %v, want the refreshed \"user\"", got)
 	}
 }

@@ -227,7 +227,11 @@ func TestHeaderChecker(t *testing.T) {
 			config: &Config{
 				HeaderAuthUserPhone: "X-User-Phone",
 				HeaderAuthUserMail:  "X-User-Mail",
-				HeaderAuthCheckFunc: func(phone, mail string) bool { return true },
+				// The checker now refuses identity headers when the config
+				// carries no trust decision at all; these cases exercise the
+				// header logic, not the trust gate.
+				HeaderAuthAllowUntrustedHeaders: true,
+				HeaderAuthCheckFunc:             func(phone, mail string) bool { return true },
 			},
 			wantSkip: true,
 		},
@@ -236,7 +240,11 @@ func TestHeaderChecker(t *testing.T) {
 			config: &Config{
 				HeaderAuthUserPhone: "X-User-Phone",
 				HeaderAuthUserMail:  "X-User-Mail",
-				HeaderAuthCheckFunc: func(phone, mail string) bool { return phone == "1234567890" },
+				// The checker now refuses identity headers when the config
+				// carries no trust decision at all; these cases exercise the
+				// header logic, not the trust gate.
+				HeaderAuthAllowUntrustedHeaders: true,
+				HeaderAuthCheckFunc:             func(phone, mail string) bool { return phone == "1234567890" },
 			},
 			phone:    "1234567890",
 			wantAuth: true,
@@ -246,7 +254,11 @@ func TestHeaderChecker(t *testing.T) {
 			config: &Config{
 				HeaderAuthUserPhone: "X-User-Phone",
 				HeaderAuthUserMail:  "X-User-Mail",
-				HeaderAuthCheckFunc: func(phone, mail string) bool { return mail == "user@example.com" },
+				// The checker now refuses identity headers when the config
+				// carries no trust decision at all; these cases exercise the
+				// header logic, not the trust gate.
+				HeaderAuthAllowUntrustedHeaders: true,
+				HeaderAuthCheckFunc:             func(phone, mail string) bool { return mail == "user@example.com" },
 			},
 			mail:     "user@example.com",
 			wantAuth: true,
@@ -256,7 +268,11 @@ func TestHeaderChecker(t *testing.T) {
 			config: &Config{
 				HeaderAuthUserPhone: "X-User-Phone",
 				HeaderAuthUserMail:  "X-User-Mail",
-				HeaderAuthCheckFunc: func(phone, mail string) bool { return false },
+				// The checker now refuses identity headers when the config
+				// carries no trust decision at all; these cases exercise the
+				// header logic, not the trust gate.
+				HeaderAuthAllowUntrustedHeaders: true,
+				HeaderAuthCheckFunc:             func(phone, mail string) bool { return false },
 			},
 			phone:   "invalid",
 			wantErr: ErrUserNotFound,
@@ -266,7 +282,11 @@ func TestHeaderChecker(t *testing.T) {
 			config: &Config{
 				HeaderAuthUserPhone: "X-User-Phone",
 				HeaderAuthUserMail:  "X-User-Mail",
-				HeaderAuthCheckFunc: func(phone, mail string) bool { return true },
+				// The checker now refuses identity headers when the config
+				// carries no trust decision at all; these cases exercise the
+				// header logic, not the trust gate.
+				HeaderAuthAllowUntrustedHeaders: true,
+				HeaderAuthCheckFunc:             func(phone, mail string) bool { return true },
 				HeaderAuthGetInfoFunc: func(phone, mail string) *UserInfo {
 					return &UserInfo{
 						UserID: "user-123",
