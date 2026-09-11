@@ -48,7 +48,14 @@ func (c *PasswordChecker) Check(ctx Context, sess Session) (*AuthResult, error) 
 	if c.config.PasswordNormalizer != nil {
 		normalizedPassword = c.config.PasswordNormalizer(password)
 	} else {
-		// Default normalization: uppercase, trim spaces
+		// Default normalization: uppercase, strip spaces.
+		//
+		// This is shaped for invite/access codes ("ABCD 1234"), not for
+		// passwords: upper-casing makes the comparison case-insensitive, which
+		// throws away entropy the caller may believe it has. Supply
+		// PasswordNormalizer (strings.TrimSpace, or nothing at all) for real
+		// passwords. Note that ValidPasswords must be stored already
+		// normalized, or nothing will ever match.
 		normalizedPassword = strings.ToUpper(strings.TrimSpace(password))
 		normalizedPassword = strings.ReplaceAll(normalizedPassword, " ", "")
 	}
@@ -88,6 +95,12 @@ func NewHeaderChecker(config *Config) *HeaderChecker {
 
 // Check implements AuthChecker.
 func (c *HeaderChecker) Check(ctx Context, sess Session) (*AuthResult, error) {
+	// The identity headers are a claim, not a credential: refuse them unless
+	// the deployment has said they can be trusted on this request.
+	if c.config.HeaderAuthTrustFunc != nil && !c.config.HeaderAuthTrustFunc(ctx) {
+		return nil, nil // skip this checker
+	}
+
 	phone := ctx.Get(c.config.HeaderAuthUserPhone)
 	mail := ctx.Get(c.config.HeaderAuthUserMail)
 

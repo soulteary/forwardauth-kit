@@ -6,8 +6,14 @@ import "errors"
 var (
 	// Configuration errors
 	ErrNoPasswordConfigured = errors.New("password authentication enabled but no passwords configured")
-	ErrNoUserCheckFunc      = errors.New("header authentication enabled but no user check function provided")
-	ErrInvalidConfig        = errors.New("invalid configuration")
+	// ErrHeaderAuthTrustUnspecified indicates header-based authentication is
+	// enabled without stating whether the identity headers can be trusted.
+	// Set HeaderAuthTrustFunc to validate the peer, or
+	// HeaderAuthAllowUntrustedHeaders to accept them from any caller.
+	ErrHeaderAuthTrustUnspecified = errors.New("header auth requires HeaderAuthTrustFunc or HeaderAuthAllowUntrustedHeaders")
+
+	ErrNoUserCheckFunc = errors.New("header authentication enabled but no user check function provided")
+	ErrInvalidConfig   = errors.New("invalid configuration")
 
 	// Authentication errors
 	ErrNotAuthenticated  = errors.New("not authenticated")

@@ -15,19 +15,46 @@ type Config struct {
 	SessionEnabled bool
 
 	// Password authentication
-	PasswordEnabled    bool
-	PasswordHeader     string   // Header name for password authentication (default: "Stargate-Password")
-	ValidPasswords     []string // List of valid password hashes
-	PasswordAlgorithm  string   // Algorithm: "plaintext", "bcrypt", "argon2"
+	PasswordEnabled bool
+	PasswordHeader  string // Header name for password authentication (default: "Stargate-Password")
+	// ValidPasswords holds the accepted values in plaintext, compared in
+	// constant time. They are NOT hashes, despite what this field was
+	// previously documented as; PasswordCheckFunc is the hook for verifying
+	// against hashes.
+	ValidPasswords     []string
+	PasswordAlgorithm  string // Algorithm: "plaintext", "bcrypt", "argon2"
 	PasswordCheckFunc  PasswordCheckFunc
 	PasswordNormalizer func(password string) string // Optional password normalizer
 
 	// Header-based authentication (e.g., Warden)
+	//
+	// SECURITY: the phone and mail headers are an identity *claim*, not a
+	// credential. Anything that can reach this endpoint can set them. They are
+	// only safe when an upstream proxy strips whatever the client sent and
+	// replaces it with a value it established itself -- and neither Traefik's
+	// trustForwardHeader nor a plain nginx proxy_pass does that for custom
+	// headers. Either configure the proxy to strip them, or supply
+	// HeaderAuthTrustFunc so this package can refuse requests that did not
+	// come through it.
 	HeaderAuthEnabled     bool
 	HeaderAuthUserPhone   string // Header name for phone (default: "X-User-Phone")
 	HeaderAuthUserMail    string // Header name for email (default: "X-User-Mail")
 	HeaderAuthCheckFunc   UserCheckFunc
 	HeaderAuthGetInfoFunc UserInfoFunc
+
+	// HeaderAuthTrustFunc reports whether the identity headers on this request
+	// can be trusted, typically by checking that the peer is a known proxy.
+	// When it returns false the header checker is skipped entirely.
+	//
+	// Validate requires either this or HeaderAuthAllowUntrustedHeaders when
+	// HeaderAuthEnabled is set, so the decision has to be made explicitly.
+	HeaderAuthTrustFunc func(c Context) bool
+
+	// HeaderAuthAllowUntrustedHeaders acknowledges that the identity headers
+	// are accepted from any caller. Only set this when the proxy in front is
+	// known to overwrite them; it means anyone who can reach this endpoint
+	// directly can authenticate as any user in the allow list.
+	HeaderAuthAllowUntrustedHeaders bool
 
 	// Step-up authentication
 	StepUpEnabled    bool
@@ -133,6 +160,10 @@ func (c *Config) Validate() error {
 
 	if c.HeaderAuthEnabled && c.HeaderAuthCheckFunc == nil {
 		return ErrNoUserCheckFunc
+	}
+
+	if c.HeaderAuthEnabled && c.HeaderAuthTrustFunc == nil && !c.HeaderAuthAllowUntrustedHeaders {
+		return ErrHeaderAuthTrustUnspecified
 	}
 
 	return nil

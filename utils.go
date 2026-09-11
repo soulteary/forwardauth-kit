@@ -1,6 +1,8 @@
 package forwardauth
 
 import (
+	"bytes"
+	"encoding/xml"
 	"fmt"
 	"strings"
 )
@@ -20,6 +22,10 @@ func IsHTMLRequest(c Context) bool {
 
 	acceptParts := strings.Split(acceptHeader, ",")
 	for i, acceptPart := range acceptParts {
+		// "*/*" only counts in first position, i.e. when the client expressed
+		// no preference at all. "application/json, */*" prefers JSON, and
+		// GetPreferredFormat agrees: it returns on the first match, so that
+		// header yields "json" there too.
 		format := strings.Trim(strings.SplitN(acceptPart, ";", 2)[0], " ")
 		if format == "text/html" || (i == 0 && format == "*/*") {
 			return true
@@ -87,7 +93,12 @@ func SendErrorResponse(c Context, statusCode int, message string) error {
 		})
 	case "xml":
 		c.Set("Content-Type", "application/xml")
-		return c.Status(statusCode).SendString(fmt.Sprintf(`<errors><error code="%d">%s</error></errors>`, statusCode, message))
+		// The message is interpolated into markup, so it has to be escaped.
+		var escaped bytes.Buffer
+		if err := xml.EscapeText(&escaped, []byte(message)); err != nil {
+			escaped.Reset()
+		}
+		return c.Status(statusCode).SendString(fmt.Sprintf(`<errors><error code="%d">%s</error></errors>`, statusCode, escaped.String()))
 	default:
 		c.Set("Content-Type", "text/plain")
 		return c.Status(statusCode).SendString(message)

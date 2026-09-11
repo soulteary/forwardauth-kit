@@ -1,6 +1,7 @@
 package forwardauth
 
 import (
+	"net/url"
 	"sort"
 	"time"
 )
@@ -89,8 +90,14 @@ func (h *Handler) Check(c Context, sess Session) (*AuthResult, error) {
 		return nil, ErrNotAuthenticated
 	}
 
-	// Check step-up requirement
-	if h.stepUpMatcher != nil && h.stepUpMatcher.RequiresStepUp(c.Path()) {
+	// Check step-up requirement.
+	//
+	// The path matched must be the *original* request's path. In a ForwardAuth
+	// deployment the proxy calls this endpoint at a fixed URL (/_auth in the
+	// README's own nginx config) and passes the real target in X-Forwarded-Uri,
+	// so matching c.Path() compared the patterns against "/_auth" every time
+	// and never fired. Step-up was configured and silently inert.
+	if h.stepUpMatcher != nil && h.stepUpMatcher.RequiresStepUp(h.forwarded.GetURI(c)) {
 		if sess == nil {
 			return nil, ErrStepUpRequired
 		}
@@ -143,19 +150,16 @@ func (h *Handler) refreshAuthInfo(c Context, sess Session, result *AuthResult) {
 	refreshDuration := time.Since(refreshStart)
 
 	if userInfo != nil {
-		// Update session with fresh authorization info
-		if len(userInfo.Scopes) > 0 {
-			sess.Set(KeyUserScope, userInfo.Scopes)
-			result.Scopes = userInfo.Scopes
-		}
-		if userInfo.Role != "" {
-			sess.Set(KeyUserRole, userInfo.Role)
-			result.Role = userInfo.Role
-		}
-		if userInfo.Name != "" {
-			sess.Set(KeyUserName, userInfo.Name)
-			result.Name = userInfo.Name
-		}
+		// Replace, do not merge. Only overwriting non-empty values meant a
+		// user whose scopes had been revoked to none, or whose role had been
+		// cleared, kept the privileges already in their session forever: the
+		// refresh could raise privileges but never lower them.
+		sess.Set(KeyUserScope, userInfo.Scopes)
+		result.Scopes = userInfo.Scopes
+		sess.Set(KeyUserRole, userInfo.Role)
+		result.Role = userInfo.Role
+		sess.Set(KeyUserName, userInfo.Name)
+		result.Name = userInfo.Name
 		sess.Set(KeyAuthRefreshedAt, time.Now().Unix())
 		result.RefreshedAt = time.Now()
 
@@ -175,10 +179,26 @@ func (h *Handler) refreshAuthInfo(c Context, sess Session, result *AuthResult) {
 			}
 		}
 	} else {
+		// The user no longer exists, or the directory is unreachable. Either
+		// way the session's cached authorisation can no longer be vouched for,
+		// so it is dropped rather than left in place: a deleted or suspended
+		// account kept its privileges for as long as the lookup kept failing.
+		sess.Set(KeyUserScope, []string{})
+		sess.Set(KeyUserRole, "")
+		result.Scopes = nil
+		result.Role = ""
+		result.AuthRefreshFailed = true
+
+		if err := sess.Save(); err != nil {
+			if h.config.Logger != nil {
+				h.config.Logger.Warn().Err(err).Msg("Failed to save session after clearing stale authorization")
+			}
+		}
+
 		if h.config.Logger != nil {
 			h.config.Logger.Warn().
 				Dur("duration", refreshDuration).
-				Msg("Failed to refresh auth info: user not found")
+				Msg("Failed to refresh auth info: user not found, cleared cached authorization")
 		}
 	}
 }
@@ -209,7 +229,9 @@ func (h *Handler) HandleNotAuthenticated(c Context) error {
 func (h *Handler) HandleStepUpRequired(c Context) error {
 	if IsHTMLRequest(c) {
 		callbackURL := h.forwarded.BuildCallbackURL(c, h.config.AuthHost, h.config.LoginPath, h.config.CallbackParam)
-		stepUpURL := h.config.StepUpURL + "?" + h.config.CallbackParam + "=" + callbackURL
+		// The callback URL contains "://" and its own query string, so it has
+		// to be escaped before being used as a query parameter value.
+		stepUpURL := h.config.StepUpURL + "?" + url.QueryEscape(h.config.CallbackParam) + "=" + url.QueryEscape(callbackURL)
 		return c.Redirect(stepUpURL)
 	}
 
