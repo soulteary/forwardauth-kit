@@ -15,9 +15,10 @@ func TestStepUpMatchesForwardedURI(t *testing.T) {
 	sess.data[KeyAuthenticated] = true
 
 	h := NewHandler(&Config{
-		SessionEnabled: true,
-		StepUpEnabled:  true,
-		StepUpPaths:    []string{"/admin/*"},
+		SessionEnabled:            true,
+		StepUpEnabled:             true,
+		StepUpForwardedURITrusted: true,
+		StepUpPaths:               []string{"/admin/*"},
 	})
 
 	ctx := newMockContext()
@@ -169,6 +170,7 @@ func TestStepUpMatchesForwardedPathWithQuery(t *testing.T) {
 		HeaderAuthAllowUntrustedHeaders: true,
 		HeaderAuthCheckFunc:             func(string, string) bool { return true },
 		StepUpEnabled:                   true,
+		StepUpForwardedURITrusted:       true,
 		StepUpPaths:                     []string{"/settings/security"},
 		StepUpSessionKey:                "step_up_verified",
 	}
@@ -284,5 +286,54 @@ func TestRefreshKeepsAnOmittedName(t *testing.T) {
 	}
 	if got := sess.Get(KeyUserRole); got != "user" {
 		t.Errorf("KeyUserRole = %v, want the refreshed \"user\"", got)
+	}
+}
+
+// --- Codex review round 2 (PR #4) ---
+
+// TestUntrustedForwardedURICannotSkipStepUp is the regression test for taking
+// X-Forwarded-Uri at face value. A proxy that forwards a client-supplied
+// header rather than overwriting it -- Traefik with trustForwardHeader: true
+// -- lets an authenticated client send "X-Forwarded-Uri: /public" and skip
+// step-up on a protected route. Without an explicit declaration that the proxy
+// overwrites the header, such a request is treated as protected.
+func TestUntrustedForwardedURICannotSkipStepUp(t *testing.T) {
+	newHandler := func(trusted bool) *Handler {
+		return NewHandler(&Config{
+			SessionEnabled:            true,
+			StepUpEnabled:             true,
+			StepUpPaths:               []string{"/admin/*"},
+			StepUpSessionKey:          "step_up_verified",
+			StepUpForwardedURITrusted: trusted,
+		})
+	}
+
+	authed := func() *mockSession {
+		sess := newMockSession()
+		sess.data[KeyAuthenticated] = true
+		return sess
+	}
+
+	// The forged claim: really hitting /admin/settings, claiming /public.
+	ctx := newMockContext()
+	ctx.path = "/_auth"
+	ctx.headers["X-Forwarded-Uri"] = "/public"
+
+	if _, err := newHandler(false).Check(ctx, authed()); !errors.Is(err, ErrStepUpRequired) {
+		t.Errorf("untrusted forwarded URI: err = %v, want ErrStepUpRequired -- the client chose the target", err)
+	}
+
+	// A deployment whose proxy overwrites the header keeps the precise
+	// behaviour: /public really is unprotected.
+	if _, err := newHandler(true).Check(ctx, authed()); errors.Is(err, ErrStepUpRequired) {
+		t.Error("trusted forwarded URI: step-up fired on an unprotected route")
+	}
+
+	// With no forwarded header at all there is nothing client-chosen to
+	// distrust, so the fallback to the request path still applies.
+	bare := newMockContext()
+	bare.path = "/public"
+	if _, err := newHandler(false).Check(bare, authed()); errors.Is(err, ErrStepUpRequired) {
+		t.Error("step-up fired on an unprotected path with no forwarded header")
 	}
 }

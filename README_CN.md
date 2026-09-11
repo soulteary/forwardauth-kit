@@ -79,6 +79,15 @@ config := forwardauth.Config{
     HeaderAuthEnabled:   true,
     HeaderAuthUserPhone: "X-User-Phone",
     HeaderAuthUserMail:  "X-User-Mail",
+
+    // 必填。身份 Header 只是"声明"而非凭证：任何能访问到本接口的调用方都能设置它们。
+    // 需要明确指定哪些请求可以信任，通常是"仅来自反向代理"：
+    HeaderAuthTrustFunc: func(c forwardauth.Context) bool {
+        return c.Get("X-Forwarded-For") != "" && trustedProxy(c.RemoteIP())
+    },
+    // ……或显式声明接受任意来源的 Header——仅当除代理外无人能访问本接口时才安全：
+    //   HeaderAuthAllowUntrustedHeaders: true,
+
     HeaderAuthCheckFunc: func(phone, mail string) bool {
         // 检查用户是否在白名单中
         return wardenClient.CheckUserInList(phone, mail)
@@ -109,6 +118,13 @@ config := forwardauth.Config{
     SessionEnabled:   true,
     StepUpEnabled:    true,
     StepUpPaths:      []string{"/admin/*", "/settings/security"},
+    // 当代理会传递 X-Forwarded-Uri 时必填。二次验证匹配的是"原始目标路径"，
+    // 它来自该 Header；只有当代理会"覆盖"它时才可设为 true
+    // （nginx 的 `proxy_set_header X-Forwarded-Uri $request_uri` 即是）。
+    // 若代理只是原样转发客户端提供的值（如 Traefik 的 trustForwardHeader: true），
+    // 客户端就能发送 "X-Forwarded-Uri: /public" 绕过二次验证；
+    // 因此该项为 false 时，任何携带此 Header 的请求都会被当作受保护路由。
+    StepUpForwardedURITrusted: true,
     StepUpURL:        "/_step_up",
     StepUpSessionKey: "step_up_verified",
 }

@@ -79,6 +79,17 @@ config := forwardauth.Config{
     HeaderAuthEnabled:   true,
     HeaderAuthUserPhone: "X-User-Phone",
     HeaderAuthUserMail:  "X-User-Mail",
+
+    // REQUIRED. The identity headers are a claim, not a credential: anything
+    // that can reach this endpoint can set them. Say which requests may be
+    // believed -- normally "only from the proxy":
+    HeaderAuthTrustFunc: func(c forwardauth.Context) bool {
+        return c.Get("X-Forwarded-For") != "" && trustedProxy(c.RemoteIP())
+    },
+    // ...or acknowledge explicitly that any caller may supply them, which is
+    // only safe when nothing but the proxy can reach this endpoint at all:
+    //   HeaderAuthAllowUntrustedHeaders: true,
+
     HeaderAuthCheckFunc: func(phone, mail string) bool {
         // Check if user exists in allow list
         return wardenClient.CheckUserInList(phone, mail)
@@ -109,6 +120,14 @@ config := forwardauth.Config{
     SessionEnabled:   true,
     StepUpEnabled:    true,
     StepUpPaths:      []string{"/admin/*", "/settings/security"},
+    // REQUIRED when the proxy passes X-Forwarded-Uri. Step-up matches the
+    // ORIGINAL target, which arrives in that header; set this only if the
+    // proxy OVERWRITES it (nginx `proxy_set_header X-Forwarded-Uri
+    // $request_uri` does). A proxy that merely forwards a client-supplied
+    // value -- Traefik's trustForwardHeader: true -- lets a client send
+    // "X-Forwarded-Uri: /public" and skip step-up, so when this is false any
+    // request carrying the header is treated as protected.
+    StepUpForwardedURITrusted: true,
     StepUpURL:        "/_step_up",
     StepUpSessionKey: "step_up_verified",
 }
@@ -151,6 +170,9 @@ handler := forwardauth.NewHandler(&config)
 | `StepUpPaths` | []string | - | Glob patterns for protected paths |
 | `StepUpURL` | string | "/_step_up" | Step-up verification URL |
 | `StepUpSessionKey` | string | "step_up_verified" | Session key for step-up flag |
+| `StepUpForwardedURITrusted` | bool | false | The proxy overwrites `X-Forwarded-Uri`; when false, any request carrying it is treated as protected |
+| `HeaderAuthTrustFunc` | func(Context) bool | nil | Which requests may supply identity headers. Required unless `HeaderAuthAllowUntrustedHeaders` is set |
+| `HeaderAuthAllowUntrustedHeaders` | bool | false | Accept identity headers from any caller |
 | `AuthRefreshEnabled` | bool | false | Enable auth info refresh |
 | `AuthRefreshInterval` | Duration | 5m | Interval between refreshes |
 | `UserHeaderName` | string | "X-Forwarded-User" | Primary user header |

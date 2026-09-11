@@ -97,7 +97,7 @@ func (h *Handler) Check(c Context, sess Session) (*AuthResult, error) {
 	// README's own nginx config) and passes the real target in X-Forwarded-Uri,
 	// so matching c.Path() compared the patterns against "/_auth" every time
 	// and never fired. Step-up was configured and silently inert.
-	if h.stepUpMatcher != nil && h.stepUpMatcher.RequiresStepUp(forwardedPath(h.forwarded.GetURI(c))) {
+	if h.stepUpMatcher != nil && h.stepUpRequiredFor(c) {
 		if sess == nil {
 			return nil, ErrStepUpRequired
 		}
@@ -284,4 +284,21 @@ func (h *Handler) GetStepUpMatcher() *StepUpMatcher {
 // GetConfig returns the handler configuration.
 func (h *Handler) GetConfig() *Config {
 	return h.config
+}
+
+// stepUpRequiredFor reports whether this request's target is a step-up route.
+//
+// The target comes from X-Forwarded-Uri, which only the proxy should be able
+// to set. When the deployment has not declared that its proxy OVERWRITES that
+// header (StepUpForwardedURITrusted), a present value may have been chosen by
+// the client -- Traefik with trustForwardHeader: true forwards it verbatim --
+// so "this route is not protected" is not a conclusion that can be drawn from
+// it. Such a request is treated as protected: failing closed costs a step-up
+// prompt, failing open costs the control entirely.
+func (h *Handler) stepUpRequiredFor(c Context) bool {
+	forwarded := c.Get("X-Forwarded-Uri")
+	if forwarded != "" && !h.config.StepUpForwardedURITrusted {
+		return true
+	}
+	return h.stepUpMatcher.RequiresStepUp(forwardedPath(h.forwarded.GetURI(c)))
 }

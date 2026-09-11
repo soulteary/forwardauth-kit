@@ -50,6 +50,26 @@ type Config struct {
 	// HeaderAuthEnabled is set, so the decision has to be made explicitly.
 	HeaderAuthTrustFunc func(c Context) bool
 
+	// StepUpForwardedURITrusted declares that the proxy OVERWRITES
+	// X-Forwarded-Uri on every request, so its value cannot be chosen by the
+	// client.
+	//
+	// Step-up matching reads the forwarded URI, because in a ForwardAuth
+	// deployment this endpoint is called at a fixed path and the real target
+	// arrives in that header. A proxy that merely FORWARDS a client-supplied
+	// header -- Traefik's trustForwardHeader: true does exactly that -- lets
+	// an authenticated client send "X-Forwarded-Uri: /public" and skip
+	// step-up on a protected route. nginx's documented
+	//
+	//	proxy_set_header X-Forwarded-Uri $request_uri;
+	//
+	// overwrites it and is safe.
+	//
+	// When this is false and a request carries X-Forwarded-Uri, step-up is
+	// required unconditionally: an attacker-chosen target cannot be shown to
+	// be unprotected, so the safe answer is to treat it as protected.
+	StepUpForwardedURITrusted bool
+
 	// HeaderAuthAllowUntrustedHeaders acknowledges that the identity headers
 	// are accepted from any caller. Only set this when the proxy in front is
 	// known to overwrite them; it means anyone who can reach this endpoint
