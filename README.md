@@ -89,10 +89,11 @@ config := forwardauth.Config{
     // proxy says nothing about who wrote X-User-Phone -- the proxy forwards
     // whatever the client sent unless it is configured to clear it. See the
     // nginx example below, which does both halves.
-    HeaderAuthTrustFunc: func(c forwardauth.Context) bool {
-        return subtle.ConstantTimeCompare(
-            []byte(c.Get("X-Proxy-Secret")), []byte(proxySecret)) == 1
-    },
+    // Trusts nothing if proxySecret is empty, and nothing that fails to
+    // present the header. Do NOT hand-roll this comparison:
+    // subtle.ConstantTimeCompare("", "") is 1, so an unset secret would
+    // trust every request, header or not.
+    HeaderAuthTrustFunc: forwardauth.ProxySecretTrustFunc("X-Proxy-Secret", proxySecret),
     // ...or acknowledge explicitly that any caller may supply them, which is
     // only safe when nothing but the proxy can reach this endpoint at all:
     //   HeaderAuthAllowUntrustedHeaders: true,

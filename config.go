@@ -4,6 +4,7 @@
 package forwardauth
 
 import (
+	"crypto/subtle"
 	"regexp"
 	"strings"
 	"time"
@@ -308,4 +309,27 @@ func (m *StepUpMatcher) IsEnabled() bool {
 // PatternCount returns the number of configured patterns.
 func (m *StepUpMatcher) PatternCount() int {
 	return len(m.patterns)
+}
+
+// ProxySecretTrustFunc returns a HeaderAuthTrustFunc that believes the
+// identity headers only on requests presenting secret in the named header.
+//
+// Use it rather than comparing by hand. subtle.ConstantTimeCompare("", "")
+// returns 1, so an empty configured secret -- an unset environment variable,
+// a config that failed to load -- makes a hand-written comparison trust a
+// request that supplies NO header at all. That is fail-open at the one place
+// this check exists to fail closed, so an empty secret here trusts nothing,
+// and neither does an absent or empty header.
+func ProxySecretTrustFunc(header, secret string) func(c Context) bool {
+	if header == "" || secret == "" {
+		return func(Context) bool { return false }
+	}
+	want := []byte(secret)
+	return func(c Context) bool {
+		got := c.Get(header)
+		if got == "" {
+			return false
+		}
+		return subtle.ConstantTimeCompare([]byte(got), want) == 1
+	}
 }

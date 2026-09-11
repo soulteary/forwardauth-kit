@@ -1,7 +1,6 @@
 package forwardauth
 
 import (
-	"crypto/subtle"
 	"errors"
 	"strings"
 	"testing"
@@ -397,10 +396,7 @@ func TestDocumentedHeaderAuthConfigCompiles(t *testing.T) {
 		HeaderAuthEnabled:   true,
 		HeaderAuthUserPhone: "X-User-Phone",
 		HeaderAuthUserMail:  "X-User-Mail",
-		HeaderAuthTrustFunc: func(c Context) bool {
-			return subtle.ConstantTimeCompare(
-				[]byte(c.Get("X-Proxy-Secret")), []byte(proxySecret)) == 1
-		},
+		HeaderAuthTrustFunc: ProxySecretTrustFunc("X-Proxy-Secret", proxySecret),
 		HeaderAuthCheckFunc: func(phone, mail string) bool {
 			return phone == "13800000000"
 		},
@@ -418,5 +414,42 @@ func TestDocumentedHeaderAuthConfigCompiles(t *testing.T) {
 	forged.headers["X-User-Phone"] = "13800000000"
 	if _, err := h.Check(forged, nil); err == nil {
 		t.Error("identity headers without the proxy's secret were believed")
+	}
+}
+
+// TestProxySecretTrustFuncFailsClosed is the regression test for comparing the
+// proxy secret by hand. subtle.ConstantTimeCompare("", "") returns 1, so an
+// unset secret made the hand-written check in the READMEs trust a request that
+// presented NO header -- and that request could then supply forged identity
+// headers.
+func TestProxySecretTrustFuncFailsClosed(t *testing.T) {
+	none := newMockContext() // no X-Proxy-Secret at all
+
+	if ProxySecretTrustFunc("X-Proxy-Secret", "")(none) {
+		t.Error("an empty configured secret trusted a request carrying no header")
+	}
+	if ProxySecretTrustFunc("", "s3cr3t")(none) {
+		t.Error("an empty header name trusted a request")
+	}
+	if ProxySecretTrustFunc("X-Proxy-Secret", "s3cr3t")(none) {
+		t.Error("a request carrying no header was trusted")
+	}
+
+	empty := newMockContext()
+	empty.headers["X-Proxy-Secret"] = ""
+	if ProxySecretTrustFunc("X-Proxy-Secret", "")(empty) {
+		t.Error("an empty secret matched an empty header")
+	}
+
+	wrong := newMockContext()
+	wrong.headers["X-Proxy-Secret"] = "nope"
+	if ProxySecretTrustFunc("X-Proxy-Secret", "s3cr3t")(wrong) {
+		t.Error("a wrong secret was trusted")
+	}
+
+	right := newMockContext()
+	right.headers["X-Proxy-Secret"] = "s3cr3t"
+	if !ProxySecretTrustFunc("X-Proxy-Secret", "s3cr3t")(right) {
+		t.Error("the correct secret was not trusted")
 	}
 }

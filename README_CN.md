@@ -86,10 +86,10 @@ config := forwardauth.Config{
     // 应当校验"只有代理才能产生"的东西，例如代理注入的共享密钥；
     // 仅凭网络对端地址是不够的：请求由代理转发，并不能说明 X-User-Phone
     // 是谁写的——除非代理被显式配置为清除它。下方 nginx 示例两件事都做了。
-    HeaderAuthTrustFunc: func(c forwardauth.Context) bool {
-        return subtle.ConstantTimeCompare(
-            []byte(c.Get("X-Proxy-Secret")), []byte(proxySecret)) == 1
-    },
+    // proxySecret 为空时不信任任何请求，未携带该 Header 的请求同样不信任。
+    // 请不要自己手写这个比较：subtle.ConstantTimeCompare("", "") 返回 1，
+    // 密钥没配上时会变成「信任所有请求」，无论有没有带 Header。
+    HeaderAuthTrustFunc: forwardauth.ProxySecretTrustFunc("X-Proxy-Secret", proxySecret),
     // ……或显式声明接受任意来源的 Header——仅当除代理外无人能访问本接口时才安全：
     //   HeaderAuthAllowUntrustedHeaders: true,
 
