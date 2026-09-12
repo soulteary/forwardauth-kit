@@ -786,3 +786,67 @@ func TestParameterSpecificityOutranksHeaderOrder(t *testing.T) {
 		})
 	}
 }
+
+// --- Codex review round 11 (PR #4) ---
+
+// TestPredicatesUseTheSameRangePrecedence is the regression test for applying
+// specificity in the negotiator but not in the exported predicates.
+//
+// IsJSONRequest/IsXMLRequest took the FIRST range naming the type, while
+// GetPreferredFormat took the most specific one, so the two disagreed in both
+// directions once a parameterized range was present -- a caller branching on
+// IsJSONRequest and then calling SendErrorResponse would have got one answer
+// from each.
+func TestPredicatesUseTheSameRangePrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		accept   string
+		format   string
+		wantJSON bool
+	}{
+		// The reported pair, both directions.
+		{"specific acceptance wins", "application/json;q=0, application/json;charset=utf-8;q=1", "json", true},
+		{"specific refusal wins", "application/json;q=1, application/json;charset=utf-8;q=0", "text", false},
+
+		// Unchanged: a wildcard does not NAME the type, even at q=1.
+		{"wildcard does not name", "*/*", "html", false},
+		{"bare refusal", "application/json;q=0", "text", false},
+		{"plain request", "text/html, application/json", "html", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := newMockContext()
+			ctx.headers["Accept"] = tc.accept
+
+			if got := GetPreferredFormat(ctx); got != tc.format {
+				t.Errorf("GetPreferredFormat(%q) = %q, want %q", tc.accept, got, tc.format)
+			}
+			if got := IsJSONRequest(ctx); got != tc.wantJSON {
+				t.Errorf("IsJSONRequest(%q) = %v, want %v", tc.accept, got, tc.wantJSON)
+			}
+			// The invariant: whenever the negotiator settles on JSON, the
+			// predicate must agree the client asked for it.
+			if GetPreferredFormat(ctx) == "json" && !IsJSONRequest(ctx) {
+				t.Errorf("GetPreferredFormat chose json but IsJSONRequest says the client did not ask for it")
+			}
+		})
+	}
+}
+
+// TestXMLPredicateUsesTheSamePrecedence covers the other exported predicate.
+func TestXMLPredicateUsesTheSamePrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		accept  string
+		wantXML bool
+	}{
+		{"application/xml;q=0, application/xml;charset=utf-8;q=1", true},
+		{"application/xml;q=1, application/xml;charset=utf-8;q=0", false},
+	} {
+		t.Run(tc.accept, func(t *testing.T) {
+			ctx := newMockContext()
+			ctx.headers["Accept"] = tc.accept
+			if got := IsXMLRequest(ctx); got != tc.wantXML {
+				t.Errorf("IsXMLRequest(%q) = %v, want %v", tc.accept, got, tc.wantXML)
+			}
+		})
+	}
+}

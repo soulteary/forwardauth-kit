@@ -168,41 +168,47 @@ func splitOutsideQuotes(s string, sep byte) []string {
 	return append(parts, s[start:])
 }
 
-// matchAccept returns the weight the header gives mediaType, and the position
-// of the range that decided it.
+// bestRange returns the range that speaks for mediaType.
 //
 // Precedence is RFC 9110 12.5.1: an exact type/subtype outranks "type/*",
-// which outranks "*/*", regardless of the weights -- the most specific range
-// is the one that speaks for this type.
-func matchAccept(ranges []acceptRange, mediaType string) (quality float64, order int, matched bool) {
+// which outranks "*/*"; within a shape, a range matching more media-type
+// parameters is the more specific one. Equal on both, the earlier range wins.
+//
+// namesOnly drops the wildcards, which is the narrower question the exported
+// predicates ask -- "did the client NAME this type?" rather than "would this
+// type be acceptable?".
+func bestRange(ranges []acceptRange, mediaType string, namesOnly bool) (acceptRange, bool) {
 	typ, sub, _ := strings.Cut(mediaType, "/")
 
-	bestShape, bestParams := 0, -1
+	var best acceptRange
+	bestShape, bestParams, found := 0, -1, false
+
 	for _, r := range ranges {
 		var shape int
 		switch {
 		case r.typ == typ && r.sub == sub:
 			shape = 3
-		case r.typ == typ && r.sub == "*":
+		case !namesOnly && r.typ == typ && r.sub == "*":
 			shape = 2
-		case r.typ == "*" && r.sub == "*":
+		case !namesOnly && r.typ == "*" && r.sub == "*":
 			shape = 1
 		default:
 			continue
 		}
-		// Shape first, then the number of matching parameters: RFC 9110
-		// 12.5.1 makes a range with more of them the more specific match, so
-		// "application/json;charset=utf-8;q=0" speaks for JSON over a bare
-		// "application/json;q=1" that appeared earlier. Equal on both, the
-		// earlier range wins.
 		if shape < bestShape || (shape == bestShape && r.params <= bestParams) {
 			continue
 		}
-		bestShape, bestParams = shape, r.params
-		quality, order, matched = r.quality, r.order, true
+		best, bestShape, bestParams, found = r, shape, r.params, true
 	}
 
-	return quality, order, matched
+	return best, found
+}
+
+// matchAccept returns the weight the header gives mediaType, and the position
+// of the range that decided it.
+func matchAccept(ranges []acceptRange, mediaType string) (quality float64, order int, matched bool) {
+	best, ok := bestRange(ranges, mediaType, false)
+	return best.quality, best.order, ok
 }
 
 // namesMediaType reports whether the header names mediaType exactly, with a
@@ -218,14 +224,13 @@ func namesMediaType(header, mediaType string) bool {
 		return false
 	}
 
-	typ, sub, _ := strings.Cut(mediaType, "/")
-	for _, r := range parseAccept(header) {
-		if r.typ == typ && r.sub == sub {
-			return r.quality > 0
-		}
-	}
-
-	return false
+	// The SAME precedence the negotiator uses, restricted to ranges that name
+	// the type. Taking the first exact match instead made the two disagree:
+	// "application/json;q=0, application/json;charset=utf-8;q=1" has
+	// GetPreferredFormat answer "json" off the more specific range while this
+	// read the earlier q=0 and answered false.
+	best, ok := bestRange(parseAccept(header), mediaType, true)
+	return ok && best.quality > 0
 }
 
 // negotiatedFormats are the formats SendErrorResponse can produce, in the
