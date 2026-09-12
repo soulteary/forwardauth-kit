@@ -230,13 +230,51 @@ func namesMediaType(header, mediaType string) bool {
 		return false
 	}
 
-	// The SAME precedence the negotiator uses, restricted to ranges that name
-	// the type. Taking the first exact match instead made the two disagree:
+	// The SAME precedence and the SAME two passes the negotiator uses,
+	// restricted to ranges that name the type. Both halves matter. Taking the
+	// first exact match instead of the best one made the two disagree:
 	// "application/json;q=0, application/json;charset=utf-8;q=1" has
 	// GetPreferredFormat answer "json" off the more specific range while this
-	// read the earlier q=0 and answered false.
-	best, ok := bestRange(parseAccept(header), mediaType, true)
-	return ok && best.quality > 0
+	// read the earlier q=0 and answered false. Skipping the honourable pass
+	// did the same in the other direction: with "application/*;q=1,
+	// application/json;profile=foo;q=0" the negotiator drops the profile
+	// range it cannot honour and sends JSON off "application/*", while this
+	// let the refusal it discarded win on shape and answered false.
+	named := false
+	honourableFirst(parseAccept(header), func(ranges []acceptRange) bool {
+		best, ok := bestRange(ranges, mediaType, true)
+		named = ok && best.quality > 0
+		return named
+	})
+	return named
+}
+
+// honourableRanges keeps the ranges this package can actually honour. A
+// media-type parameter narrows what a range matches, and the responses here
+// carry none, so a parameterized range does not describe anything that would
+// actually be sent.
+func honourableRanges(ranges []acceptRange) []acceptRange {
+	honourable := make([]acceptRange, 0, len(ranges))
+	for _, r := range ranges {
+		if !r.unhonourable {
+			honourable = append(honourable, r)
+		}
+	}
+	return honourable
+}
+
+// honourableFirst calls answered with the honourable ranges and, when that
+// pass answers nothing, calls it again with the whole set.
+//
+// The negotiator and the exported predicates both have to walk the header this
+// way, in this order, and agree on when a pass has answered nothing -- a range
+// matched at q=0 has not. Every time the two have been written out separately
+// they have drifted, so they share the walk instead.
+func honourableFirst(ranges []acceptRange, answered func([]acceptRange) bool) {
+	if answered(honourableRanges(ranges)) {
+		return
+	}
+	answered(ranges)
 }
 
 // negotiatedFormats are the formats SendErrorResponse can produce, in the
@@ -279,32 +317,26 @@ func GetPreferredFormat(c Context) string {
 		return "html"
 	}
 
-	ranges := parseAccept(acceptHeader)
-
-	// Ranges this package can actually honour come first. A media-type
-	// parameter narrows what a range matches, and the responses here carry
-	// none, so "application/xml;q=0.5, application/json;profile=foo;q=1" must
-	// answer XML: the JSON the client asked for is not the JSON that would be
-	// sent, while the XML is exactly what would be sent.
-	honourable := make([]acceptRange, 0, len(ranges))
-	for _, r := range ranges {
-		if !r.unhonourable {
-			honourable = append(honourable, r)
-		}
-	}
-	if format := selectFormat(honourable); format != "" {
-		return format
-	}
-
-	// Nothing fully acceptable. RFC 9110 12.5.1 lets a server disregard the
-	// header rather than refuse, and that is the better answer here: a client
-	// asking for "text/html;profile=..." is still far better served the login
-	// redirect than a plain-text 401 it did not ask for either.
-	if format := selectFormat(ranges); format != "" {
-		return format
+	// Ranges this package can actually honour come first, so
+	// "application/xml;q=0.5, application/json;profile=foo;q=1" answers XML:
+	// the JSON the client asked for is not the JSON that would be sent, while
+	// the XML is exactly what would be sent.
+	//
+	// When nothing honourable is acceptable the second pass takes the whole
+	// header. RFC 9110 12.5.1 lets a server disregard the header rather than
+	// refuse, and that is the better answer here: a client asking for
+	// "text/html;profile=..." is still far better served the login redirect
+	// than a plain-text 401 it did not ask for either.
+	format := ""
+	honourableFirst(parseAccept(acceptHeader), func(ranges []acceptRange) bool {
+		format = selectFormat(ranges)
+		return format != ""
+	})
+	if format == "" {
+		return "text"
 	}
 
-	return "text"
+	return format
 }
 
 // SendErrorResponse sends an error response in the format preferred by the client.

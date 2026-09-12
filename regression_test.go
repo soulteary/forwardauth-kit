@@ -920,3 +920,95 @@ func TestGenericWildcardBoundaryIsDeliberate(t *testing.T) {
 			"because it makes every Accept: */* a JSON request")
 	}
 }
+
+// TestPredicatesRunTheSameTwoPassesAsTheNegotiator pins the reported case:
+// "application/*;q=1, application/json;profile=foo;q=0".
+//
+// The negotiator drops the profile range it cannot honour before matching, so
+// it sends JSON off "application/*". The predicates did not drop it, so the
+// refusal -- the most specific range naming JSON -- won on shape and made
+// IsJSONRequest say the client had not asked for the JSON it was about to be
+// sent.
+func TestPredicatesRunTheSameTwoPassesAsTheNegotiator(t *testing.T) {
+	for _, tc := range []struct {
+		accept   string
+		format   string
+		wantJSON bool
+		wantXML  bool
+	}{
+		// The reported case. "application/*" is honourable and covers both
+		// application subtypes; the q=0 refusal is not honourable and is gone
+		// before either question is answered.
+		{"application/*;q=1, application/json;profile=foo;q=0", "json", true, true},
+
+		// Nothing honourable at all, so both fall back to the whole header
+		// and read the same range.
+		{"application/json;profile=foo", "json", true, false},
+		{"application/json;profile=foo;q=0", "text", false, false},
+
+		// A parameter this package does satisfy stays honourable, so the
+		// more specific range still beats the earlier refusal.
+		{"application/json;q=0, application/json;charset=utf-8;q=1", "json", true, false},
+
+		// The honourable pass answers XML, but the client did name JSON --
+		// with a profile that cannot be served. "Did the client ask for this
+		// type?" is still yes; it is the negotiator, not the predicate, that
+		// has to care whether the ask can be honoured.
+		{"application/xml;q=0.5, application/json;profile=foo;q=1", "xml", true, true},
+	} {
+		t.Run(tc.accept, func(t *testing.T) {
+			ctx := newMockContext()
+			ctx.headers["Accept"] = tc.accept
+
+			if got := GetPreferredFormat(ctx); got != tc.format {
+				t.Errorf("GetPreferredFormat(%q) = %q, want %q", tc.accept, got, tc.format)
+			}
+			if got := IsJSONRequest(ctx); got != tc.wantJSON {
+				t.Errorf("IsJSONRequest(%q) = %v, want %v", tc.accept, got, tc.wantJSON)
+			}
+			if got := IsXMLRequest(ctx); got != tc.wantXML {
+				t.Errorf("IsXMLRequest(%q) = %v, want %v", tc.accept, got, tc.wantXML)
+			}
+		})
+	}
+}
+
+// TestChosenFormatIsAlwaysReportedAsAskedFor is the invariant behind the three
+// predicate defects found so far: whatever GetPreferredFormat decides to send,
+// the matching predicate has to agree the client asked for it. A handler that
+// branches on IsJSONRequest and then lets SendErrorResponse pick the format
+// otherwise takes the wrong branch for its own response.
+//
+// The converse does not hold, and deliberately: a client can name JSON in a
+// way that cannot be served and still be sent something else.
+func TestChosenFormatIsAlwaysReportedAsAskedFor(t *testing.T) {
+	for _, accept := range []string{
+		"application/*;q=1, application/json;profile=foo;q=0",
+		"application/*;q=1, application/xml;profile=foo;q=0",
+		"application/json;profile=foo",
+		"application/json;q=0, application/json;charset=utf-8;q=1",
+		"application/xml;q=0, application/xml;charset=utf-8;q=1",
+		"application/json;profile=foo;q=1, application/json;q=0.1",
+		"application/xml;q=0.5, application/json;profile=foo;q=1",
+		"application/json, application/xml;q=0.9",
+		"application/*",
+		"application/*;q=0, application/json",
+		"text/html;profile=foo, application/json;q=0.4",
+	} {
+		t.Run(accept, func(t *testing.T) {
+			ctx := newMockContext()
+			ctx.headers["Accept"] = accept
+
+			switch format := GetPreferredFormat(ctx); format {
+			case "json":
+				if !IsJSONRequest(ctx) {
+					t.Errorf("GetPreferredFormat(%q) sends JSON but IsJSONRequest is false", accept)
+				}
+			case "xml":
+				if !IsXMLRequest(ctx) {
+					t.Errorf("GetPreferredFormat(%q) sends XML but IsXMLRequest is false", accept)
+				}
+			}
+		})
+	}
+}
