@@ -43,6 +43,12 @@ type acceptRange struct {
 	sub     string  // lowercased subtype, "*" for a wildcard
 	quality float64 // the q parameter; 1 when absent
 	order   int     // position in the header, for tie-breaking
+	// unhonourable is set when the range carries a media-type parameter this
+	// package cannot produce. Its responses are bare "application/json",
+	// "application/xml" and "text/html", so a range naming anything more
+	// specific -- a profile, a version, a non-UTF-8 charset -- is not actually
+	// matched by what would be sent.
+	unhonourable bool
 }
 
 // parseAccept parses an Accept header into weighted media ranges.
@@ -61,24 +67,52 @@ func parseAccept(header string) []acceptRange {
 			continue
 		}
 
-		quality := 1.0
+		quality, seenQ, unhonourable := 1.0, false, false
 		for _, param := range fields[1:] {
-			name, value, ok := strings.Cut(param, "=")
-			if !ok || !strings.EqualFold(strings.TrimSpace(name), "q") {
+			name, value, hasValue := strings.Cut(param, "=")
+			name = strings.TrimSpace(name)
+
+			if !seenQ && strings.EqualFold(name, "q") {
+				seenQ = true
+				// A malformed weight is not a refusal: RFC 9110 says to
+				// ignore the parameter, so the default weight stands.
+				if q, err := strconv.ParseFloat(strings.TrimSpace(value), 64); err == nil && q >= 0 {
+					quality = math.Min(q, 1)
+				}
 				continue
 			}
-			// A malformed weight is not a refusal: RFC 9110 says to ignore
-			// the parameter, so the default weight stands.
-			if q, err := strconv.ParseFloat(strings.TrimSpace(value), 64); err == nil && q >= 0 {
-				quality = math.Min(q, 1)
+			if seenQ {
+				// Everything after q is an accept-ext (RFC 9110 12.5.1), not
+				// a media-type parameter, so it says nothing about which
+				// representation would match.
+				continue
 			}
-			break
+
+			// A media-type parameter. It narrows what the range matches, and
+			// this package emits no parameters -- except that its output IS
+			// UTF-8, so charset=utf-8 is one it genuinely satisfies.
+			if hasValue && strings.EqualFold(name, "charset") &&
+				strings.EqualFold(unquoteParam(strings.TrimSpace(value)), "utf-8") {
+				continue
+			}
+			unhonourable = true
 		}
 
-		ranges = append(ranges, acceptRange{typ: typ, sub: sub, quality: quality, order: i})
+		ranges = append(ranges, acceptRange{
+			typ: typ, sub: sub, quality: quality, order: i, unhonourable: unhonourable,
+		})
 	}
 
 	return ranges
+}
+
+// unquoteParam removes the surrounding quotes of a quoted-string parameter
+// value, leaving an unquoted token untouched.
+func unquoteParam(v string) string {
+	if len(v) >= 2 && v[0] == '"' && v[len(v)-1] == '"' {
+		return strings.ReplaceAll(v[1:len(v)-1], `\"`, `"`)
+	}
+	return v
 }
 
 // splitOutsideQuotes splits on sep, ignoring separators inside a quoted
@@ -195,15 +229,9 @@ var negotiatedFormats = []struct {
 	{"xml", "application/xml"},
 }
 
-// GetPreferredFormat returns the preferred response format based on Accept header.
-func GetPreferredFormat(c Context) string {
-	acceptHeader := c.Get("Accept")
-	if acceptHeader == "" {
-		return "html"
-	}
-
-	ranges := parseAccept(acceptHeader)
-
+// selectFormat picks the best-weighted format among the given ranges, or ""
+// when none of them is acceptable.
+func selectFormat(ranges []acceptRange) string {
 	bestFormat, bestQuality, bestOrder := "", 0.0, 0
 	for _, candidate := range negotiatedFormats {
 		quality, order, matched := matchAccept(ranges, candidate.mediaType)
@@ -215,12 +243,42 @@ func GetPreferredFormat(c Context) string {
 		}
 		bestFormat, bestQuality, bestOrder = candidate.format, quality, order
 	}
+	return bestFormat
+}
 
-	if bestFormat == "" {
-		return "text"
+// GetPreferredFormat returns the preferred response format based on Accept header.
+func GetPreferredFormat(c Context) string {
+	acceptHeader := c.Get("Accept")
+	if acceptHeader == "" {
+		return "html"
 	}
 
-	return bestFormat
+	ranges := parseAccept(acceptHeader)
+
+	// Ranges this package can actually honour come first. A media-type
+	// parameter narrows what a range matches, and the responses here carry
+	// none, so "application/xml;q=0.5, application/json;profile=foo;q=1" must
+	// answer XML: the JSON the client asked for is not the JSON that would be
+	// sent, while the XML is exactly what would be sent.
+	honourable := make([]acceptRange, 0, len(ranges))
+	for _, r := range ranges {
+		if !r.unhonourable {
+			honourable = append(honourable, r)
+		}
+	}
+	if format := selectFormat(honourable); format != "" {
+		return format
+	}
+
+	// Nothing fully acceptable. RFC 9110 12.5.1 lets a server disregard the
+	// header rather than refuse, and that is the better answer here: a client
+	// asking for "text/html;profile=..." is still far better served the login
+	// redirect than a plain-text 401 it did not ask for either.
+	if format := selectFormat(ranges); format != "" {
+		return format
+	}
+
+	return "text"
 }
 
 // SendErrorResponse sends an error response in the format preferred by the client.

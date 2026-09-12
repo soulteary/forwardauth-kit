@@ -618,8 +618,13 @@ func TestAcceptParsingRespectsQuotedParameters(t *testing.T) {
 		{"quoted parameter, html wanted", `text/html;profile="a,b";q=1, application/json;q=0`, "html"},
 		{"quoted parameter, no weights", `text/html;profile="a,b"`, "html"},
 
-		// An unbalanced quote must not swallow the rest of the header.
-		{"unbalanced quote", `text/html;profile="a, application/json`, "html"},
+		// An unbalanced quote must not swallow the rest of the header. The
+		// answer is JSON rather than HTML precisely BECAUSE the remainder is
+		// parsed: the HTML range carries a profile this package cannot
+		// produce, while the application/json that follows is exactly what
+		// would be sent. Before the recovery this returned "html" by never
+		// seeing the JSON at all.
+		{"unbalanced quote", `text/html;profile="a, application/json`, "json"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := newMockContext()
@@ -665,6 +670,58 @@ func TestUnmatchedQuoteDoesNotSwallowLaterRanges(t *testing.T) {
 
 		// Well-formed quoting must keep working exactly as before.
 		{"balanced still honoured", `text/html;profile="a,b";q=0, application/json;q=1`, "json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := newMockContext()
+			ctx.headers["Accept"] = tc.accept
+
+			if got := GetPreferredFormat(ctx); got != tc.want {
+				t.Errorf("GetPreferredFormat(%q) = %q, want %q", tc.accept, got, tc.want)
+			}
+			if got, format := IsHTMLRequest(ctx), GetPreferredFormat(ctx); got != (format == "html") {
+				t.Errorf("IsHTMLRequest = %v but GetPreferredFormat = %q", got, format)
+			}
+		})
+	}
+}
+
+// --- Codex review round 9 (PR #4) ---
+
+// TestUnproducibleMediaParametersDoNotWinNegotiation is the regression test
+// for discarding media-type parameters before selecting a format.
+//
+// RFC 9110 12.5.1: a media range's parameters narrow what it matches. This
+// package's responses carry no parameters, so `application/json;profile=foo`
+// is NOT matched by the bare `application/json` that would actually be sent --
+// yet it was recorded as an exact match and won the negotiation, and
+// SendErrorResponse then emitted `Content-Type: application/json` without the
+// profile while a plainly-requested XML representation it could produce went
+// unused.
+func TestUnproducibleMediaParametersDoNotWinNegotiation(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		accept string
+		want   string
+	}{
+		// The reported case: XML is producible, the higher-weighted JSON is not.
+		{"producible xml beats parameterized json", "application/xml;q=0.5, application/json;profile=foo;q=1", "xml"},
+		{"producible json beats parameterized xml", "application/json;q=0.5, application/xml;version=2;q=1", "json"},
+
+		// A parameter AFTER q is an accept-ext, not a media-type parameter, so
+		// it must not disqualify the range.
+		{"accept-ext after q is not a parameter", "application/xml;q=0.5, application/json;q=1;ext=1", "json"},
+
+		// charset=utf-8 IS satisfied -- the output is UTF-8 -- so it must not
+		// push a client onto its second choice.
+		{"utf-8 charset is producible", "application/json;charset=utf-8, application/xml", "json"},
+		{"quoted utf-8 charset", `application/json;charset="UTF-8", application/xml`, "json"},
+		{"other charset is not", "application/json;charset=iso-8859-1, application/xml", "xml"},
+
+		// When NOTHING is producible, the header is disregarded rather than
+		// degrading every such client to plain text (RFC 9110 12.5.1 allows
+		// this, and an HTML login redirect beats a text/plain 401).
+		{"nothing producible falls back", `text/html;profile="a,b"`, "html"},
+		{"nothing producible, html refused", "text/html;profile=x;q=0, application/json;profile=y", "json"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := newMockContext()
