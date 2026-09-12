@@ -43,6 +43,11 @@ type acceptRange struct {
 	sub     string  // lowercased subtype, "*" for a wildcard
 	quality float64 // the q parameter; 1 when absent
 	order   int     // position in the header, for tie-breaking
+	// params counts the media-type parameters this package DOES satisfy. RFC
+	// 9110 12.5.1 ranks a range with more matching parameters as more
+	// specific, so "application/json;charset=utf-8;q=0" outranks a bare
+	// "application/json;q=1" and its refusal is the one that controls.
+	params int
 	// unhonourable is set when the range carries a media-type parameter this
 	// package cannot produce. Its responses are bare "application/json",
 	// "application/xml" and "text/html", so a range naming anything more
@@ -68,6 +73,7 @@ func parseAccept(header string) []acceptRange {
 		}
 
 		quality, seenQ, unhonourable := 1.0, false, false
+		params := 0
 		for _, param := range fields[1:] {
 			name, value, hasValue := strings.Cut(param, "=")
 			name = strings.TrimSpace(name)
@@ -93,13 +99,15 @@ func parseAccept(header string) []acceptRange {
 			// UTF-8, so charset=utf-8 is one it genuinely satisfies.
 			if hasValue && strings.EqualFold(name, "charset") &&
 				strings.EqualFold(unquoteParam(strings.TrimSpace(value)), "utf-8") {
+				params++
 				continue
 			}
 			unhonourable = true
 		}
 
 		ranges = append(ranges, acceptRange{
-			typ: typ, sub: sub, quality: quality, order: i, unhonourable: unhonourable,
+			typ: typ, sub: sub, quality: quality, order: i,
+			params: params, unhonourable: unhonourable,
 		})
 	}
 
@@ -169,22 +177,29 @@ func splitOutsideQuotes(s string, sep byte) []string {
 func matchAccept(ranges []acceptRange, mediaType string) (quality float64, order int, matched bool) {
 	typ, sub, _ := strings.Cut(mediaType, "/")
 
-	best := 0
+	bestShape, bestParams := 0, -1
 	for _, r := range ranges {
-		var specificity int
+		var shape int
 		switch {
 		case r.typ == typ && r.sub == sub:
-			specificity = 3
+			shape = 3
 		case r.typ == typ && r.sub == "*":
-			specificity = 2
+			shape = 2
 		case r.typ == "*" && r.sub == "*":
-			specificity = 1
+			shape = 1
 		default:
 			continue
 		}
-		if specificity > best {
-			best, quality, order, matched = specificity, r.quality, r.order, true
+		// Shape first, then the number of matching parameters: RFC 9110
+		// 12.5.1 makes a range with more of them the more specific match, so
+		// "application/json;charset=utf-8;q=0" speaks for JSON over a bare
+		// "application/json;q=1" that appeared earlier. Equal on both, the
+		// earlier range wins.
+		if shape < bestShape || (shape == bestShape && r.params <= bestParams) {
+			continue
 		}
+		bestShape, bestParams = shape, r.params
+		quality, order, matched = r.quality, r.order, true
 	}
 
 	return quality, order, matched

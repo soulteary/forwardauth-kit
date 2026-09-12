@@ -736,3 +736,53 @@ func TestUnproducibleMediaParametersDoNotWinNegotiation(t *testing.T) {
 		})
 	}
 }
+
+// --- Codex review round 10 (PR #4) ---
+
+// TestParameterSpecificityOutranksHeaderOrder is the regression test for
+// ranking two ranges of the same type/subtype by header order alone.
+//
+// RFC 9110 12.5.1 makes a range with more matching media-type parameters the
+// more specific match. Since this package treats charset=utf-8 as satisfied,
+// "application/json;charset=utf-8;q=0" is the more specific statement about
+// JSON than a bare "application/json;q=1" -- so its refusal controls, and the
+// answer is HTML. Ranking by position picked the earlier bare range and
+// answered JSON, the one format the client had ruled out.
+func TestParameterSpecificityOutranksHeaderOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		accept string
+		want   string
+	}{
+		// The reported case.
+		{"parameterized refusal controls", "application/json;q=1, application/json;charset=utf-8;q=0, text/html;q=0.5", "html"},
+
+		// And the other way round: a parameterized ACCEPT outranks a bare refusal.
+		{"parameterized acceptance controls", "application/json;q=0, application/json;charset=utf-8;q=1, text/html;q=0.5", "json"},
+
+		// Order still decides when specificity ties.
+		{"equal specificity keeps order", "application/json;q=1, application/json;q=0", "json"},
+
+		// An exact type/subtype still outranks a wildcard carrying a
+		// parameter: JSON takes its q from the exact range (1) rather than
+		// from the wildcard (0), while HTML has only the wildcard's 0.
+		{"exact beats parameterized wildcard", "*/*;charset=utf-8;q=0, application/json;q=1", "json"},
+
+		// The converse, which is NOT a specificity question: a wildcard at a
+		// higher weight than a specific range simply wins on weight, because
+		// the specific range's own q is lower.
+		{"weight still decides across shapes", "*/*;charset=utf-8;q=1, application/json;q=0.2", "html"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := newMockContext()
+			ctx.headers["Accept"] = tc.accept
+
+			if got := GetPreferredFormat(ctx); got != tc.want {
+				t.Errorf("GetPreferredFormat(%q) = %q, want %q", tc.accept, got, tc.want)
+			}
+			if got, format := IsHTMLRequest(ctx), GetPreferredFormat(ctx); got != (format == "html") {
+				t.Errorf("IsHTMLRequest = %v but GetPreferredFormat = %q", got, format)
+			}
+		})
+	}
+}
