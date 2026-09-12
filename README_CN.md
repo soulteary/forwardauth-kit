@@ -79,6 +79,24 @@ config := forwardauth.Config{
     HeaderAuthEnabled:   true,
     HeaderAuthUserPhone: "X-User-Phone",
     HeaderAuthUserMail:  "X-User-Mail",
+
+    // 必填。身份 Header 只是"声明"而非凭证：任何能访问到本接口的调用方都能设置它们。
+    // 需要明确指定哪些请求可以信任。
+    //
+    // 应当校验"只有代理才能产生"的东西，例如代理注入的共享密钥；
+    // 仅凭网络对端地址是不够的：请求由代理转发，并不能说明 X-User-Phone
+    // 是谁写的——除非代理被显式配置为清除它。下方 nginx 示例两件事都做了。
+    // proxySecret 为空时不信任任何请求，未携带该 Header 的请求同样不信任。
+    // 请不要自己手写这个比较：subtle.ConstantTimeCompare("", "") 返回 1，
+    // 密钥没配上时会变成「信任所有请求」，无论有没有带 Header。
+    HeaderAuthTrustFunc: forwardauth.ProxySecretTrustFunc("X-Proxy-Secret", proxySecret),
+    // ……或显式声明接受任意来源的 Header。仅当代理会「清除」客户端发来的身份
+    // Header 并写入自己的值时才安全；能否访问到本接口是另一个问题，回答不了
+    // 这一个。只做转发的代理（Traefik 的 trustForwardHeader，或任何没有清除该
+    // Header 的 proxy_pass）会把客户端发来的值原样带上，因此即使本接口除代理
+    // 外无人可达，客户端依然能把自己伪造成白名单里的任意用户：
+    //   HeaderAuthAllowUntrustedHeaders: true,
+
     HeaderAuthCheckFunc: func(phone, mail string) bool {
         // 检查用户是否在白名单中
         return wardenClient.CheckUserInList(phone, mail)
@@ -109,6 +127,16 @@ config := forwardauth.Config{
     SessionEnabled:   true,
     StepUpEnabled:    true,
     StepUpPaths:      []string{"/admin/*", "/settings/security"},
+    // 当代理会传递 X-Forwarded-Uri 时必填。二次验证匹配的是"原始目标路径"，
+    // 它来自该 Header；只有当代理会"覆盖"它时才可设为 true
+    // （nginx 的 `proxy_set_header X-Forwarded-Uri $request_uri` 即是）。
+    // 若代理只是原样转发客户端提供的值（如 Traefik 的 trustForwardHeader: true），
+    // 客户端就能发送 "X-Forwarded-Uri: /public" 绕过二次验证；
+    // 因此该项为 false 时，任何携带此 Header 的请求都会被当作受保护路由。
+    // 另外，无论该项取值如何，只要请求没有可用的转发路径（Header 缺失、
+    // 为空，或只有查询串），都会被当作受保护路由：此时没有可匹配的目标，
+    // 而认证端点自身的路径并不是目标。
+    StepUpForwardedURITrusted: true,
     StepUpURL:        "/_step_up",
     StepUpSessionKey: "step_up_verified",
 }
@@ -147,10 +175,13 @@ handler := forwardauth.NewHandler(&config)
 | `HeaderAuthUserMail` | string | "X-User-Mail" | 邮箱 Header 名称 |
 | `HeaderAuthCheckFunc` | func | - | 用户存在性检查函数 |
 | `HeaderAuthGetInfoFunc` | func | - | 用户信息获取函数 |
+| `HeaderAuthTrustFunc` | func(Context) bool | nil | 哪些请求可以提供身份 Header；未设置 `HeaderAuthAllowUntrustedHeaders` 时必填。它是「代理清除这些 Header」之上的一层，而不是替代——它证明的是请求从哪里来，不是这些 Header 由谁写入 |
+| `HeaderAuthAllowUntrustedHeaders` | bool | false | 接受任意来源的身份 Header。仅当代理会清除客户端发来的值并写入自己的值时才安全——接口即使完全隔离，只要代理只做转发就仍可被伪造 |
 | `StepUpEnabled` | bool | false | 启用 Step-up 认证 |
 | `StepUpPaths` | []string | - | 受保护路径 Glob 模式 |
 | `StepUpURL` | string | "/_step_up" | Step-up 验证 URL |
 | `StepUpSessionKey` | string | "step_up_verified" | Step-up 标志 Session 键 |
+| `StepUpForwardedURITrusted` | bool | false | 代理会覆盖 `X-Forwarded-Uri`；为 false 时，任何携带该 Header 的请求都按受保护处理。没有可用转发路径的请求在两种取值下都按受保护处理 |
 | `AuthRefreshEnabled` | bool | false | 启用授权刷新 |
 | `AuthRefreshInterval` | Duration | 5m | 刷新间隔 |
 | `UserHeaderName` | string | "X-Forwarded-User" | 主用户 Header |
@@ -250,14 +281,34 @@ location / {
 
 location = /_auth {
     internal;
+
+    # 定义这个密钥。部署时用模板注入（envsubst / Ansible / Helm value 等）——
+    # $proxy_secret 不是 nginx 内置变量，只引用不定义会导致 nginx 启动失败。
+    set $proxy_secret "REPLACE_WITH_A_LONG_RANDOM_STRING";
+
     proxy_pass http://auth-service:3000/_auth;
     proxy_pass_request_body off;
     proxy_set_header Content-Length "";
     proxy_set_header X-Forwarded-Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-Uri $request_uri;
+
+    # HeaderAuthTrustFunc 校验的密钥。不要放在面向客户端的 location 中，
+    # 否则客户端自己就能发送它。
+    proxy_set_header X-Proxy-Secret $proxy_secret;
+
+    # 必须清除身份 Header。否则客户端可以自带 X-User-Phone / X-User-Mail，
+    # nginx 原样转发，信任校验随之通过——而这个身份是客户端伪造的。
+    # 请用你自己确定的值覆盖它们，或者置空。
+    proxy_set_header X-User-Phone "";
+    proxy_set_header X-User-Mail "";
 }
 ```
+
+`X-Forwarded-For` 同样由客户端可控：nginx 是在已有值后面追加，前面的条目
+都是客户端自己填的。需要对端地址时请使用 `$remote_addr` 而非该 Header；
+另外 `forwardauth.Context` 并不暴露对端地址，这类校验需要在进入 handler
+之前、在你的适配层完成。
 
 ## 许可证
 

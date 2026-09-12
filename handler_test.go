@@ -138,12 +138,13 @@ func TestHandlerCheck_StepUpVerified(t *testing.T) {
 
 func TestHandlerCheck_StepUpRequiredWhenSessionNil(t *testing.T) {
 	config := &Config{
-		HeaderAuthEnabled:   true,
-		HeaderAuthUserPhone: "X-User-Phone",
-		HeaderAuthCheckFunc: func(phone, mail string) bool { return true },
-		StepUpEnabled:       true,
-		StepUpPaths:         []string{"/admin/*"},
-		StepUpSessionKey:    "step_up_verified",
+		HeaderAuthEnabled:               true,
+		HeaderAuthUserPhone:             "X-User-Phone",
+		HeaderAuthAllowUntrustedHeaders: true,
+		HeaderAuthCheckFunc:             func(phone, mail string) bool { return true },
+		StepUpEnabled:                   true,
+		StepUpPaths:                     []string{"/admin/*"},
+		StepUpSessionKey:                "step_up_verified",
 	}
 	handler := NewHandler(config)
 
@@ -165,11 +166,16 @@ func TestHandlerCheck_StepUpNotRequiredForPath(t *testing.T) {
 		StepUpEnabled:    true,
 		StepUpPaths:      []string{"/admin/*"},
 		StepUpSessionKey: "step_up_verified",
+		// The target is read from X-Forwarded-Uri and believed only from a
+		// proxy declared to overwrite it; a request with no usable forwarded
+		// path is protected. See stepUpRequiredFor.
+		StepUpForwardedURITrusted: true,
 	}
 	handler := NewHandler(config)
 
 	ctx := newMockContext()
-	ctx.path = "/public/page"
+	ctx.path = "/_auth"
+	ctx.headers["X-Forwarded-Uri"] = "/public/page"
 	sess := newMockSession()
 	sess.Set(KeyAuthenticated, true)
 	// step_up_verified is not set, but not required for this path
@@ -278,6 +284,9 @@ func TestHandlerCheck_HeaderAuth(t *testing.T) {
 		HeaderAuthEnabled:   true,
 		HeaderAuthUserPhone: "X-User-Phone",
 		HeaderAuthUserMail:  "X-User-Mail",
+		// A config with no trust decision is now refused by the checker
+		// itself, not only by Config.Validate.
+		HeaderAuthAllowUntrustedHeaders: true,
 		HeaderAuthCheckFunc: func(phone, mail string) bool {
 			return phone == "1234567890" || mail == "user@example.com"
 		},

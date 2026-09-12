@@ -58,6 +58,12 @@ type AuthResult struct {
 	AuthMethod    AuthMethod
 	NeedsRefresh  bool
 	RefreshedAt   time.Time
+
+	// AuthRefreshFailed is set when an authorization refresh could not be
+	// completed and the session's cached scopes and role were dropped as a
+	// result. Callers that want to fail the request outright on a directory
+	// outage can check it.
+	AuthRefreshFailed bool
 }
 
 // AuthMethod represents the authentication method used.

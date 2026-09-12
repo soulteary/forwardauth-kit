@@ -79,6 +79,30 @@ config := forwardauth.Config{
     HeaderAuthEnabled:   true,
     HeaderAuthUserPhone: "X-User-Phone",
     HeaderAuthUserMail:  "X-User-Mail",
+
+    // REQUIRED. The identity headers are a claim, not a credential: anything
+    // that can reach this endpoint can set them. Say which requests may be
+    // believed.
+    //
+    // Check something only the proxy can produce. A shared secret it injects
+    // works; the network peer alone does NOT, because being connected by the
+    // proxy says nothing about who wrote X-User-Phone -- the proxy forwards
+    // whatever the client sent unless it is configured to clear it. See the
+    // nginx example below, which does both halves.
+    // Trusts nothing if proxySecret is empty, and nothing that fails to
+    // present the header. Do NOT hand-roll this comparison:
+    // subtle.ConstantTimeCompare("", "") is 1, so an unset secret would
+    // trust every request, header or not.
+    HeaderAuthTrustFunc: forwardauth.ProxySecretTrustFunc("X-Proxy-Secret", proxySecret),
+    // ...or acknowledge explicitly that any caller may supply them. This is
+    // only safe when the proxy STRIPS the client's identity headers and sets
+    // its own; reachability is a different question and does not answer this
+    // one. A proxy that merely forwards them -- Traefik's trustForwardHeader,
+    // or any proxy_pass that does not clear them -- relays whatever the client
+    // sent, so even an endpoint nothing else can reach will authenticate a
+    // client as any user in the allow list:
+    //   HeaderAuthAllowUntrustedHeaders: true,
+
     HeaderAuthCheckFunc: func(phone, mail string) bool {
         // Check if user exists in allow list
         return wardenClient.CheckUserInList(phone, mail)
@@ -109,6 +133,17 @@ config := forwardauth.Config{
     SessionEnabled:   true,
     StepUpEnabled:    true,
     StepUpPaths:      []string{"/admin/*", "/settings/security"},
+    // REQUIRED when the proxy passes X-Forwarded-Uri. Step-up matches the
+    // ORIGINAL target, which arrives in that header; set this only if the
+    // proxy OVERWRITES it (nginx `proxy_set_header X-Forwarded-Uri
+    // $request_uri` does). A proxy that merely forwards a client-supplied
+    // value -- Traefik's trustForwardHeader: true -- lets a client send
+    // "X-Forwarded-Uri: /public" and skip step-up, so when this is false any
+    // request carrying the header is treated as protected. A request with no
+    // usable forwarded path -- header absent, empty, or query-only -- is
+    // treated as protected under either setting, because there is no target
+    // to match and the auth endpoint's own path is not one.
+    StepUpForwardedURITrusted: true,
     StepUpURL:        "/_step_up",
     StepUpSessionKey: "step_up_verified",
 }
@@ -151,6 +186,9 @@ handler := forwardauth.NewHandler(&config)
 | `StepUpPaths` | []string | - | Glob patterns for protected paths |
 | `StepUpURL` | string | "/_step_up" | Step-up verification URL |
 | `StepUpSessionKey` | string | "step_up_verified" | Session key for step-up flag |
+| `StepUpForwardedURITrusted` | bool | false | The proxy overwrites `X-Forwarded-Uri`; when false, any request carrying it is treated as protected. A request with no usable forwarded path is protected either way |
+| `HeaderAuthTrustFunc` | func(Context) bool | nil | Which requests may supply identity headers. Required unless `HeaderAuthAllowUntrustedHeaders` is set. A layer on top of the proxy stripping them, not a replacement -- it establishes where the request came from, not who wrote the headers |
+| `HeaderAuthAllowUntrustedHeaders` | bool | false | Accept identity headers from any caller. Only safe when the proxy strips the client's and sets its own -- an isolated endpoint behind a *forwarding* proxy is still forgeable |
 | `AuthRefreshEnabled` | bool | false | Enable auth info refresh |
 | `AuthRefreshInterval` | Duration | 5m | Interval between refreshes |
 | `UserHeaderName` | string | "X-Forwarded-User" | Primary user header |
@@ -250,14 +288,37 @@ location / {
 
 location = /_auth {
     internal;
+
+    # Define the secret. Template it in at deploy time (envsubst, Ansible,
+    # a Helm value) -- $proxy_secret is not a built-in nginx variable, and
+    # nginx refuses to start if it is only referenced.
+    set $proxy_secret "REPLACE_WITH_A_LONG_RANDOM_STRING";
+
     proxy_pass http://auth-service:3000/_auth;
     proxy_pass_request_body off;
     proxy_set_header Content-Length "";
     proxy_set_header X-Forwarded-Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-Uri $request_uri;
+
+    # The secret HeaderAuthTrustFunc checks. Keep it out of the client-facing
+    # location block so a client can never send it.
+    proxy_set_header X-Proxy-Secret $proxy_secret;
+
+    # CLEAR the identity headers. Without this the client supplies its own
+    # X-User-Phone / X-User-Mail, nginx forwards them unchanged, and the
+    # trust check passes on a request whose identity the client forged.
+    # Overwrite them from something you established yourself, or empty them.
+    proxy_set_header X-User-Phone "";
+    proxy_set_header X-User-Mail "";
 }
 ```
+
+`X-Forwarded-For` is client-supplied too: nginx APPENDS to whatever arrived, so
+its leading entries are whatever the client chose. Use `$remote_addr`, not the
+header, if you need the peer address -- and note that `forwardauth.Context`
+does not expose it, so a peer-address check has to happen in your adapter
+before the handler runs.
 
 ## License
 

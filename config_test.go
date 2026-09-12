@@ -74,10 +74,30 @@ func TestConfigValidate(t *testing.T) {
 			wantErr: ErrNoUserCheckFunc,
 		},
 		{
-			name: "header auth enabled with check func",
+			// Header auth now has to state whether the identity headers can be
+			// trusted, because they are a claim rather than a credential.
+			name: "header auth enabled without a trust decision",
 			config: Config{
 				HeaderAuthEnabled:   true,
 				HeaderAuthCheckFunc: func(phone, mail string) bool { return true },
+			},
+			wantErr: ErrHeaderAuthTrustUnspecified,
+		},
+		{
+			name: "header auth enabled with a trust func",
+			config: Config{
+				HeaderAuthEnabled:   true,
+				HeaderAuthCheckFunc: func(phone, mail string) bool { return true },
+				HeaderAuthTrustFunc: func(Context) bool { return true },
+			},
+			wantErr: nil,
+		},
+		{
+			name: "header auth enabled with an explicit acknowledgement",
+			config: Config{
+				HeaderAuthEnabled:               true,
+				HeaderAuthCheckFunc:             func(phone, mail string) bool { return true },
+				HeaderAuthAllowUntrustedHeaders: true,
 			},
 			wantErr: nil,
 		},

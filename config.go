@@ -4,6 +4,7 @@
 package forwardauth
 
 import (
+	"crypto/subtle"
 	"regexp"
 	"strings"
 	"time"
@@ -15,19 +16,94 @@ type Config struct {
 	SessionEnabled bool
 
 	// Password authentication
-	PasswordEnabled    bool
-	PasswordHeader     string   // Header name for password authentication (default: "Stargate-Password")
-	ValidPasswords     []string // List of valid password hashes
-	PasswordAlgorithm  string   // Algorithm: "plaintext", "bcrypt", "argon2"
+	PasswordEnabled bool
+	PasswordHeader  string // Header name for password authentication (default: "Stargate-Password")
+	// ValidPasswords holds the accepted values in plaintext, compared in
+	// constant time. They are NOT hashes, despite what this field was
+	// previously documented as; PasswordCheckFunc is the hook for verifying
+	// against hashes.
+	ValidPasswords     []string
+	PasswordAlgorithm  string // Algorithm: "plaintext", "bcrypt", "argon2"
 	PasswordCheckFunc  PasswordCheckFunc
 	PasswordNormalizer func(password string) string // Optional password normalizer
 
 	// Header-based authentication (e.g., Warden)
+	//
+	// SECURITY: the phone and mail headers are an identity *claim*, not a
+	// credential. Anything that can reach this endpoint can set them. They are
+	// only safe when an upstream proxy strips whatever the client sent and
+	// replaces it with a value it established itself -- and neither Traefik's
+	// trustForwardHeader nor a plain nginx proxy_pass does that for custom
+	// headers.
+	//
+	// That stripping is required, not one of two options. HeaderAuthTrustFunc
+	// sits on top of it and does not stand in for it: a trust check
+	// establishes that a request came THROUGH the proxy, which says nothing
+	// about who wrote the identity headers it happens to carry. In front of a
+	// proxy that forwards them, every forged request has the expected
+	// provenance and passes every trust check. The nginx example in the README
+	// does both halves.
 	HeaderAuthEnabled     bool
 	HeaderAuthUserPhone   string // Header name for phone (default: "X-User-Phone")
 	HeaderAuthUserMail    string // Header name for email (default: "X-User-Mail")
 	HeaderAuthCheckFunc   UserCheckFunc
 	HeaderAuthGetInfoFunc UserInfoFunc
+
+	// HeaderAuthTrustFunc reports whether the identity headers on this request
+	// can be trusted. When it returns false the header checker is skipped
+	// entirely.
+	//
+	// Check something only the proxy can produce -- a secret it injects, which
+	// is what ProxySecretTrustFunc does. The peer address is NOT enough:
+	// being connected by the proxy says nothing about who wrote X-User-Phone,
+	// because the proxy forwards whatever the client sent unless it is
+	// configured to clear it.
+	//
+	// A secret proves the request came through the proxy and no more, so the
+	// proxy must still strip or overwrite the identity headers. The one way
+	// this callback can carry that weight alone is by validating the headers'
+	// provenance itself -- verifying a signature over the identity, say,
+	// rather than a bare marker that the request transited the proxy.
+	//
+	// Validate requires either this or HeaderAuthAllowUntrustedHeaders when
+	// HeaderAuthEnabled is set, so the decision has to be made explicitly.
+	HeaderAuthTrustFunc func(c Context) bool
+
+	// StepUpForwardedURITrusted declares that the proxy OVERWRITES
+	// X-Forwarded-Uri on every request, so its value cannot be chosen by the
+	// client.
+	//
+	// Step-up matching reads the forwarded URI, because in a ForwardAuth
+	// deployment this endpoint is called at a fixed path and the real target
+	// arrives in that header. A proxy that merely FORWARDS a client-supplied
+	// header -- Traefik's trustForwardHeader: true does exactly that -- lets
+	// an authenticated client send "X-Forwarded-Uri: /public" and skip
+	// step-up on a protected route. nginx's documented
+	//
+	//	proxy_set_header X-Forwarded-Uri $request_uri;
+	//
+	// overwrites it and is safe.
+	//
+	// When this is false and a request carries X-Forwarded-Uri, step-up is
+	// required unconditionally: an attacker-chosen target cannot be shown to
+	// be unprotected, so the safe answer is to treat it as protected.
+	//
+	// Step-up also requires a forwarded target to match at all. A request
+	// whose X-Forwarded-Uri is missing, empty, or carries no path component is
+	// treated as protected under either setting -- Context.Get cannot tell an
+	// absent header from an empty one, so a client could otherwise send a bare
+	// "X-Forwarded-Uri:" and have the question asked about the auth endpoint
+	// instead of the route it is really requesting. A proxy that never sets
+	// the header therefore prompts for step-up on every request; step-up was
+	// already inert in that deployment, testing /_auth against the patterns
+	// each time, and this is what makes that visible.
+	StepUpForwardedURITrusted bool
+
+	// HeaderAuthAllowUntrustedHeaders acknowledges that the identity headers
+	// are accepted from any caller. Only set this when the proxy in front is
+	// known to overwrite them; it means anyone who can reach this endpoint
+	// directly can authenticate as any user in the allow list.
+	HeaderAuthAllowUntrustedHeaders bool
 
 	// Step-up authentication
 	StepUpEnabled    bool
@@ -133,6 +209,10 @@ func (c *Config) Validate() error {
 
 	if c.HeaderAuthEnabled && c.HeaderAuthCheckFunc == nil {
 		return ErrNoUserCheckFunc
+	}
+
+	if c.HeaderAuthEnabled && c.HeaderAuthTrustFunc == nil && !c.HeaderAuthAllowUntrustedHeaders {
+		return ErrHeaderAuthTrustUnspecified
 	}
 
 	return nil
@@ -257,4 +337,33 @@ func (m *StepUpMatcher) IsEnabled() bool {
 // PatternCount returns the number of configured patterns.
 func (m *StepUpMatcher) PatternCount() int {
 	return len(m.patterns)
+}
+
+// ProxySecretTrustFunc returns a HeaderAuthTrustFunc that accepts only
+// requests presenting secret in the named header.
+//
+// What it establishes is provenance of the REQUEST, not of the identity
+// headers on it: a proxy that injects the secret and forwards the client's
+// X-User-Phone unchanged produces a request that passes this check and
+// carries a forged identity. It is a layer on top of the proxy stripping
+// those headers, never a replacement for it.
+//
+// Use it rather than comparing by hand. subtle.ConstantTimeCompare("", "")
+// returns 1, so an empty configured secret -- an unset environment variable,
+// a config that failed to load -- makes a hand-written comparison trust a
+// request that supplies NO header at all. That is fail-open at the one place
+// this check exists to fail closed, so an empty secret here trusts nothing,
+// and neither does an absent or empty header.
+func ProxySecretTrustFunc(header, secret string) func(c Context) bool {
+	if header == "" || secret == "" {
+		return func(Context) bool { return false }
+	}
+	want := []byte(secret)
+	return func(c Context) bool {
+		got := c.Get(header)
+		if got == "" {
+			return false
+		}
+		return subtle.ConstantTimeCompare([]byte(got), want) == 1
+	}
 }

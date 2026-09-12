@@ -48,7 +48,14 @@ func (c *PasswordChecker) Check(ctx Context, sess Session) (*AuthResult, error) 
 	if c.config.PasswordNormalizer != nil {
 		normalizedPassword = c.config.PasswordNormalizer(password)
 	} else {
-		// Default normalization: uppercase, trim spaces
+		// Default normalization: uppercase, strip spaces.
+		//
+		// This is shaped for invite/access codes ("ABCD 1234"), not for
+		// passwords: upper-casing makes the comparison case-insensitive, which
+		// throws away entropy the caller may believe it has. Supply
+		// PasswordNormalizer (strings.TrimSpace, or nothing at all) for real
+		// passwords. Note that ValidPasswords must be stored already
+		// normalized, or nothing will ever match.
 		normalizedPassword = strings.ToUpper(strings.TrimSpace(password))
 		normalizedPassword = strings.ReplaceAll(normalizedPassword, " ", "")
 	}
@@ -88,6 +95,23 @@ func NewHeaderChecker(config *Config) *HeaderChecker {
 
 // Check implements AuthChecker.
 func (c *HeaderChecker) Check(ctx Context, sess Session) (*AuthResult, error) {
+	// The identity headers are a claim, not a credential: refuse them unless
+	// the deployment has said they can be trusted on this request.
+	//
+	// A nil HeaderAuthTrustFunc is not permission -- it is the absence of a
+	// decision. Config.Validate rejects that combination, but nothing forces a
+	// caller to run it (NewHandler does not), so the check has to live here
+	// too or the default runtime path goes on accepting client-supplied
+	// identity headers.
+	switch {
+	case c.config.HeaderAuthTrustFunc != nil:
+		if !c.config.HeaderAuthTrustFunc(ctx) {
+			return nil, nil // not a trusted hop; skip this checker
+		}
+	case !c.config.HeaderAuthAllowUntrustedHeaders:
+		return nil, ErrHeaderAuthTrustUnspecified
+	}
+
 	phone := ctx.Get(c.config.HeaderAuthUserPhone)
 	mail := ctx.Get(c.config.HeaderAuthUserMail)
 
