@@ -34,9 +34,15 @@ type Config struct {
 	// only safe when an upstream proxy strips whatever the client sent and
 	// replaces it with a value it established itself -- and neither Traefik's
 	// trustForwardHeader nor a plain nginx proxy_pass does that for custom
-	// headers. Either configure the proxy to strip them, or supply
-	// HeaderAuthTrustFunc so this package can refuse requests that did not
-	// come through it.
+	// headers.
+	//
+	// That stripping is required, not one of two options. HeaderAuthTrustFunc
+	// sits on top of it and does not stand in for it: a trust check
+	// establishes that a request came THROUGH the proxy, which says nothing
+	// about who wrote the identity headers it happens to carry. In front of a
+	// proxy that forwards them, every forged request has the expected
+	// provenance and passes every trust check. The nginx example in the README
+	// does both halves.
 	HeaderAuthEnabled     bool
 	HeaderAuthUserPhone   string // Header name for phone (default: "X-User-Phone")
 	HeaderAuthUserMail    string // Header name for email (default: "X-User-Mail")
@@ -44,8 +50,20 @@ type Config struct {
 	HeaderAuthGetInfoFunc UserInfoFunc
 
 	// HeaderAuthTrustFunc reports whether the identity headers on this request
-	// can be trusted, typically by checking that the peer is a known proxy.
-	// When it returns false the header checker is skipped entirely.
+	// can be trusted. When it returns false the header checker is skipped
+	// entirely.
+	//
+	// Check something only the proxy can produce -- a secret it injects, which
+	// is what ProxySecretTrustFunc does. The peer address is NOT enough:
+	// being connected by the proxy says nothing about who wrote X-User-Phone,
+	// because the proxy forwards whatever the client sent unless it is
+	// configured to clear it.
+	//
+	// A secret proves the request came through the proxy and no more, so the
+	// proxy must still strip or overwrite the identity headers. The one way
+	// this callback can carry that weight alone is by validating the headers'
+	// provenance itself -- verifying a signature over the identity, say,
+	// rather than a bare marker that the request transited the proxy.
 	//
 	// Validate requires either this or HeaderAuthAllowUntrustedHeaders when
 	// HeaderAuthEnabled is set, so the decision has to be made explicitly.
@@ -321,8 +339,14 @@ func (m *StepUpMatcher) PatternCount() int {
 	return len(m.patterns)
 }
 
-// ProxySecretTrustFunc returns a HeaderAuthTrustFunc that believes the
-// identity headers only on requests presenting secret in the named header.
+// ProxySecretTrustFunc returns a HeaderAuthTrustFunc that accepts only
+// requests presenting secret in the named header.
+//
+// What it establishes is provenance of the REQUEST, not of the identity
+// headers on it: a proxy that injects the secret and forwards the client's
+// X-User-Phone unchanged produces a request that passes this check and
+// carries a forged identity. It is a layer on top of the proxy stripping
+// those headers, never a replacement for it.
 //
 // Use it rather than comparing by hand. subtle.ConstantTimeCompare("", "")
 // returns 1, so an empty configured secret -- an unset environment variable,

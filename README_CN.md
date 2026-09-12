@@ -175,7 +175,7 @@ handler := forwardauth.NewHandler(&config)
 | `HeaderAuthUserMail` | string | "X-User-Mail" | 邮箱 Header 名称 |
 | `HeaderAuthCheckFunc` | func | - | 用户存在性检查函数 |
 | `HeaderAuthGetInfoFunc` | func | - | 用户信息获取函数 |
-| `HeaderAuthTrustFunc` | func(Context) bool | nil | 哪些请求可以提供身份 Header；未设置 `HeaderAuthAllowUntrustedHeaders` 时必填 |
+| `HeaderAuthTrustFunc` | func(Context) bool | nil | 哪些请求可以提供身份 Header；未设置 `HeaderAuthAllowUntrustedHeaders` 时必填。它是「代理清除这些 Header」之上的一层，而不是替代——它证明的是请求从哪里来，不是这些 Header 由谁写入 |
 | `HeaderAuthAllowUntrustedHeaders` | bool | false | 接受任意来源的身份 Header。仅当代理会清除客户端发来的值并写入自己的值时才安全——接口即使完全隔离，只要代理只做转发就仍可被伪造 |
 | `StepUpEnabled` | bool | false | 启用 Step-up 认证 |
 | `StepUpPaths` | []string | - | 受保护路径 Glob 模式 |

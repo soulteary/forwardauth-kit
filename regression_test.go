@@ -1523,3 +1523,53 @@ func TestAllowUntrustedHeadersReallyAcceptsForgedIdentity(t *testing.T) {
 		t.Fatalf("a trust function rejected a request carrying the proxy secret (err = %v)", err)
 	}
 }
+
+// --- Codex review round 19 (PR #4) ---
+
+// TestTrustFuncDoesNotEstablishHeaderProvenance pins the distinction the
+// documentation kept losing: a trust check establishes where a request came
+// FROM, not who wrote the identity headers it carries.
+//
+// The Config comment used to offer stripping the headers and supplying
+// HeaderAuthTrustFunc as two ways to do the same job -- "either ... or" --
+// and described the callback as "typically by checking that the peer is a
+// known proxy". Both readings fail against a proxy that injects its own
+// marker and forwards the client's X-User-Phone unchanged: every forged
+// request then has exactly the provenance the check looks for.
+//
+// A characterization test. Nothing here changed; what changed is that the
+// claim is now checkable.
+func TestTrustFuncDoesNotEstablishHeaderProvenance(t *testing.T) {
+	inAllowList := func(phone, mail string) bool { return phone == "1234567890" }
+
+	handler := NewHandler(&Config{
+		HeaderAuthEnabled:   true,
+		HeaderAuthUserPhone: "X-User-Phone",
+		HeaderAuthTrustFunc: ProxySecretTrustFunc("X-Proxy-Secret", "s3cret"),
+		HeaderAuthCheckFunc: inAllowList,
+	})
+
+	// A forwarding proxy: the client wrote the identity, the proxy added its
+	// secret and passed the identity along untouched.
+	forwarded := newMockContext()
+	forwarded.headers["X-User-Phone"] = "1234567890" // written by the client
+	forwarded.headers["X-Proxy-Secret"] = "s3cret"   // added by the proxy
+
+	result, err := handler.Check(forwarded, nil)
+	if err != nil || result == nil || !result.Authenticated {
+		t.Fatalf("the premise has changed: a trust check now rejects a forwarded client identity (err = %v). "+
+			"If HeaderAuthTrustFunc has started validating the headers themselves, the Config comments "+
+			"and both READMEs need to say so", err)
+	}
+
+	// Which is why the stripping proxy is the control: once the identity
+	// header is cleared, the same client value cannot reach the checker, and
+	// the secret alone authenticates nobody.
+	stripped := newMockContext()
+	stripped.headers["X-User-Phone"] = "" // cleared by the proxy
+	stripped.headers["X-Proxy-Secret"] = "s3cret"
+
+	if _, err := handler.Check(stripped, nil); err == nil {
+		t.Error("a request whose identity header the proxy cleared still authenticated")
+	}
+}

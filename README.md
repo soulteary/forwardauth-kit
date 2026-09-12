@@ -187,7 +187,7 @@ handler := forwardauth.NewHandler(&config)
 | `StepUpURL` | string | "/_step_up" | Step-up verification URL |
 | `StepUpSessionKey` | string | "step_up_verified" | Session key for step-up flag |
 | `StepUpForwardedURITrusted` | bool | false | The proxy overwrites `X-Forwarded-Uri`; when false, any request carrying it is treated as protected. A request with no usable forwarded path is protected either way |
-| `HeaderAuthTrustFunc` | func(Context) bool | nil | Which requests may supply identity headers. Required unless `HeaderAuthAllowUntrustedHeaders` is set |
+| `HeaderAuthTrustFunc` | func(Context) bool | nil | Which requests may supply identity headers. Required unless `HeaderAuthAllowUntrustedHeaders` is set. A layer on top of the proxy stripping them, not a replacement -- it establishes where the request came from, not who wrote the headers |
 | `HeaderAuthAllowUntrustedHeaders` | bool | false | Accept identity headers from any caller. Only safe when the proxy strips the client's and sets its own -- an isolated endpoint behind a *forwarding* proxy is still forgeable |
 | `AuthRefreshEnabled` | bool | false | Enable auth info refresh |
 | `AuthRefreshInterval` | Duration | 5m | Interval between refreshes |
