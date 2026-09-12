@@ -1463,3 +1463,63 @@ func TestRefusalIsIndependentOfHeaderOrder(t *testing.T) {
 		}
 	}
 }
+
+// --- Codex review round 18 (PR #4) ---
+
+// TestAllowUntrustedHeadersReallyAcceptsForgedIdentity pins what
+// HeaderAuthAllowUntrustedHeaders does, because the READMEs described it
+// wrongly and nothing failed.
+//
+// Both READMEs said the flag was "only safe when nothing but the proxy can
+// reach this endpoint at all". Reachability is a different question and does
+// not answer this one: a proxy that FORWARDS the client's identity headers
+// relays whatever the client sent, so an endpoint nothing else can reach still
+// authenticates a client as any user in the allow list. The requirement is
+// that the proxy strips the client's headers and sets its own, which is what
+// the Config comment already said and the READMEs now say too.
+//
+// This is a characterization test, not a fix: the behaviour below is the
+// intended meaning of an explicit acknowledgement flag and has not changed.
+// It exists so the documented claim is checkable rather than prose.
+func TestAllowUntrustedHeadersReallyAcceptsForgedIdentity(t *testing.T) {
+	// The header as a forwarding proxy would deliver it: written by the
+	// client, relayed untouched.
+	forged := newMockContext()
+	forged.headers["X-User-Phone"] = "1234567890"
+
+	inAllowList := func(phone, mail string) bool { return phone == "1234567890" }
+
+	acknowledged := NewHandler(&Config{
+		HeaderAuthEnabled:               true,
+		HeaderAuthUserPhone:             "X-User-Phone",
+		HeaderAuthAllowUntrustedHeaders: true,
+		HeaderAuthCheckFunc:             inAllowList,
+	})
+	result, err := acknowledged.Check(forged, nil)
+	if err != nil || result == nil || !result.Authenticated {
+		t.Fatalf("HeaderAuthAllowUntrustedHeaders no longer accepts a client-supplied identity "+
+			"(err = %v) -- if that is deliberate, the READMEs and Config comment need updating too", err)
+	}
+
+	// The alternative the READMEs point at first: a trust function, which
+	// refuses the same request because it carries nothing only the proxy
+	// could have produced.
+	guarded := NewHandler(&Config{
+		HeaderAuthEnabled:   true,
+		HeaderAuthUserPhone: "X-User-Phone",
+		HeaderAuthTrustFunc: ProxySecretTrustFunc("X-Proxy-Secret", "s3cret"),
+		HeaderAuthCheckFunc: inAllowList,
+	})
+	if _, err := guarded.Check(forged, nil); err == nil {
+		t.Error("a trust function accepted an identity header with no proxy secret")
+	}
+
+	// And accepts it once the proxy's secret is present.
+	fromProxy := newMockContext()
+	fromProxy.headers["X-User-Phone"] = "1234567890"
+	fromProxy.headers["X-Proxy-Secret"] = "s3cret"
+	result, err = guarded.Check(fromProxy, nil)
+	if err != nil || result == nil || !result.Authenticated {
+		t.Fatalf("a trust function rejected a request carrying the proxy secret (err = %v)", err)
+	}
+}

@@ -90,7 +90,11 @@ config := forwardauth.Config{
     // 请不要自己手写这个比较：subtle.ConstantTimeCompare("", "") 返回 1，
     // 密钥没配上时会变成「信任所有请求」，无论有没有带 Header。
     HeaderAuthTrustFunc: forwardauth.ProxySecretTrustFunc("X-Proxy-Secret", proxySecret),
-    // ……或显式声明接受任意来源的 Header——仅当除代理外无人能访问本接口时才安全：
+    // ……或显式声明接受任意来源的 Header。仅当代理会「清除」客户端发来的身份
+    // Header 并写入自己的值时才安全；能否访问到本接口是另一个问题，回答不了
+    // 这一个。只做转发的代理（Traefik 的 trustForwardHeader，或任何没有清除该
+    // Header 的 proxy_pass）会把客户端发来的值原样带上，因此即使本接口除代理
+    // 外无人可达，客户端依然能把自己伪造成白名单里的任意用户：
     //   HeaderAuthAllowUntrustedHeaders: true,
 
     HeaderAuthCheckFunc: func(phone, mail string) bool {
@@ -171,6 +175,8 @@ handler := forwardauth.NewHandler(&config)
 | `HeaderAuthUserMail` | string | "X-User-Mail" | 邮箱 Header 名称 |
 | `HeaderAuthCheckFunc` | func | - | 用户存在性检查函数 |
 | `HeaderAuthGetInfoFunc` | func | - | 用户信息获取函数 |
+| `HeaderAuthTrustFunc` | func(Context) bool | nil | 哪些请求可以提供身份 Header；未设置 `HeaderAuthAllowUntrustedHeaders` 时必填 |
+| `HeaderAuthAllowUntrustedHeaders` | bool | false | 接受任意来源的身份 Header。仅当代理会清除客户端发来的值并写入自己的值时才安全——接口即使完全隔离，只要代理只做转发就仍可被伪造 |
 | `StepUpEnabled` | bool | false | 启用 Step-up 认证 |
 | `StepUpPaths` | []string | - | 受保护路径 Glob 模式 |
 | `StepUpURL` | string | "/_step_up" | Step-up 验证 URL |

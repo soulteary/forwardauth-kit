@@ -94,8 +94,13 @@ config := forwardauth.Config{
     // subtle.ConstantTimeCompare("", "") is 1, so an unset secret would
     // trust every request, header or not.
     HeaderAuthTrustFunc: forwardauth.ProxySecretTrustFunc("X-Proxy-Secret", proxySecret),
-    // ...or acknowledge explicitly that any caller may supply them, which is
-    // only safe when nothing but the proxy can reach this endpoint at all:
+    // ...or acknowledge explicitly that any caller may supply them. This is
+    // only safe when the proxy STRIPS the client's identity headers and sets
+    // its own; reachability is a different question and does not answer this
+    // one. A proxy that merely forwards them -- Traefik's trustForwardHeader,
+    // or any proxy_pass that does not clear them -- relays whatever the client
+    // sent, so even an endpoint nothing else can reach will authenticate a
+    // client as any user in the allow list:
     //   HeaderAuthAllowUntrustedHeaders: true,
 
     HeaderAuthCheckFunc: func(phone, mail string) bool {
@@ -183,7 +188,7 @@ handler := forwardauth.NewHandler(&config)
 | `StepUpSessionKey` | string | "step_up_verified" | Session key for step-up flag |
 | `StepUpForwardedURITrusted` | bool | false | The proxy overwrites `X-Forwarded-Uri`; when false, any request carrying it is treated as protected. A request with no usable forwarded path is protected either way |
 | `HeaderAuthTrustFunc` | func(Context) bool | nil | Which requests may supply identity headers. Required unless `HeaderAuthAllowUntrustedHeaders` is set |
-| `HeaderAuthAllowUntrustedHeaders` | bool | false | Accept identity headers from any caller |
+| `HeaderAuthAllowUntrustedHeaders` | bool | false | Accept identity headers from any caller. Only safe when the proxy strips the client's and sets its own -- an isolated endpoint behind a *forwarding* proxy is still forgeable |
 | `AuthRefreshEnabled` | bool | false | Enable auth info refresh |
 | `AuthRefreshInterval` | Duration | 5m | Interval between refreshes |
 | `UserHeaderName` | string | "X-Forwarded-User" | Primary user header |
