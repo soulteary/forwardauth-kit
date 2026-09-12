@@ -227,6 +227,14 @@ func (h *Handler) refreshAuthInfo(c Context, sess Session, result *AuthResult) {
 // clearedAuthorization reports whether the session already holds the cleared
 // authorization that a failed refresh writes: no role and no scopes.
 //
+// The scope cases are the ones SessionChecker reads back, and for the same
+// reason. A backend that serializes the session -- which is most of them --
+// returns the []string this package stored as a []interface{}, so treating
+// only []string as cleared meant the steady state after the first failure
+// never LOOKED cleared, and every later request wrote it again. The
+// conversion is shared with the checker so "cleared" keeps meaning "the
+// checker will read no scopes from this".
+//
 // A value of an unexpected type counts as NOT cleared, so the failure path
 // still overwrites it. Absent counts as cleared -- there is nothing to
 // replace, and an absent role reaches BuildHeaders exactly as an empty one
@@ -247,6 +255,8 @@ func clearedAuthorization(sess Session) bool {
 		return true
 	case []string:
 		return len(scopes) == 0
+	case []interface{}:
+		return len(interfaceSliceToStrings(scopes)) == 0
 	default:
 		return false
 	}

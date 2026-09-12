@@ -1292,3 +1292,81 @@ func TestFailedRefreshSavesOnlyWhatItChanges(t *testing.T) {
 		t.Errorf("saves = %d after authorization reappeared, want 2", sess.saves)
 	}
 }
+
+// --- Codex review round 16 (PR #4) ---
+
+// serializingSession models what almost every real session backend does to a
+// []string: store it, and hand it back as a []interface{}. SessionChecker
+// already reads both spellings; clearedAuthorization read only one.
+type serializingSession struct {
+	*mockSession
+	saves int
+}
+
+func (s *serializingSession) Set(key string, value interface{}) {
+	if scopes, ok := value.([]string); ok {
+		boxed := make([]interface{}, 0, len(scopes))
+		for _, scope := range scopes {
+			boxed = append(boxed, scope)
+		}
+		s.mockSession.Set(key, boxed)
+		return
+	}
+	s.mockSession.Set(key, value)
+}
+
+func (s *serializingSession) Save() error {
+	s.saves++
+	return s.mockSession.Save()
+}
+
+// TestFailedRefreshSavesOnceThroughASerializingBackend is the regression test
+// for reading the cleared scope list back in only one of its two spellings.
+//
+// The failure path writes []string{}; a backend that serializes the session
+// returns []interface{}{}. clearedAuthorization treated that as "not cleared",
+// so the steady state after the first failure never LOOKED cleared and every
+// later request wrote it again -- the sustained write traffic the previous
+// commit was supposed to have stopped, still there for every deployment whose
+// store round-trips through JSON.
+func TestFailedRefreshSavesOnceThroughASerializingBackend(t *testing.T) {
+	handler := NewHandler(&Config{
+		SessionEnabled:        true,
+		AuthRefreshEnabled:    true,
+		HeaderAuthGetInfoFunc: func(phone, mail string) *UserInfo { return nil },
+	})
+
+	sess := &serializingSession{mockSession: newMockSession()}
+	sess.mockSession.Set(KeyAuthenticated, true)
+	sess.mockSession.Set(KeyUserPhone, "1234567890")
+	sess.Set(KeyUserScope, []string{"read", "write"})
+	sess.mockSession.Set(KeyUserRole, "admin")
+
+	const requests = 25
+	for i := 0; i < requests; i++ {
+		result := &AuthResult{Authenticated: true}
+		handler.refreshAuthInfo(newMockContext(), sess, result)
+		if result.Scopes != nil || result.Role != "" || !result.AuthRefreshFailed {
+			t.Fatalf("request %d: authorization was not cleared: %+v", i, result)
+		}
+	}
+
+	if sess.saves != 1 {
+		t.Errorf("saves = %d over %d failed refreshes through a serializing backend, want 1", sess.saves, requests)
+	}
+
+	// The stored value really is the boxed spelling -- otherwise this test
+	// passes for the wrong reason.
+	if _, ok := sess.data[KeyUserScope].([]interface{}); !ok {
+		t.Fatalf("stored scopes are %T, want []interface{}; the premise has changed", sess.data[KeyUserScope])
+	}
+
+	// And a session still carrying scopes in that spelling is not cleared, so
+	// the first failure after a revocation is still persisted.
+	sess.saves = 0
+	sess.Set(KeyUserScope, []string{"read"})
+	handler.refreshAuthInfo(newMockContext(), sess, &AuthResult{Authenticated: true})
+	if sess.saves != 1 {
+		t.Errorf("saves = %d when boxed scopes were still present, want 1", sess.saves)
+	}
+}
