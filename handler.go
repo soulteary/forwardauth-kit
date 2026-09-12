@@ -191,15 +191,28 @@ func (h *Handler) refreshAuthInfo(c Context, sess Session, result *AuthResult) {
 		// way the session's cached authorisation can no longer be vouched for,
 		// so it is dropped rather than left in place: a deleted or suspended
 		// account kept its privileges for as long as the lookup kept failing.
+		alreadyCleared := clearedAuthorization(sess)
+
 		sess.Set(KeyUserScope, []string{})
 		sess.Set(KeyUserRole, "")
 		result.Scopes = nil
 		result.Role = ""
 		result.AuthRefreshFailed = true
 
-		if err := sess.Save(); err != nil {
-			if h.config.Logger != nil {
-				h.config.Logger.Warn().Err(err).Msg("Failed to save session after clearing stale authorization")
+		// Save only when there was something to clear.
+		//
+		// KeyAuthRefreshedAt is deliberately NOT advanced on failure -- a
+		// refresh that did not happen must not read as one that did -- so
+		// every subsequent request during a directory outage arrives here
+		// again. Saving each time wrote the same empty scope and empty role
+		// to the session backend on every request, for as long as the outage
+		// lasted. The clearing itself still happens on every pass: it is the
+		// write that is redundant, not the decision.
+		if !alreadyCleared {
+			if err := sess.Save(); err != nil {
+				if h.config.Logger != nil {
+					h.config.Logger.Warn().Err(err).Msg("Failed to save session after clearing stale authorization")
+				}
 			}
 		}
 
@@ -208,6 +221,34 @@ func (h *Handler) refreshAuthInfo(c Context, sess Session, result *AuthResult) {
 				Dur("duration", refreshDuration).
 				Msg("Failed to refresh auth info: user not found, cleared cached authorization")
 		}
+	}
+}
+
+// clearedAuthorization reports whether the session already holds the cleared
+// authorization that a failed refresh writes: no role and no scopes.
+//
+// A value of an unexpected type counts as NOT cleared, so the failure path
+// still overwrites it. Absent counts as cleared -- there is nothing to
+// replace, and an absent role reaches BuildHeaders exactly as an empty one
+// does.
+func clearedAuthorization(sess Session) bool {
+	switch role := sess.Get(KeyUserRole).(type) {
+	case nil:
+	case string:
+		if role != "" {
+			return false
+		}
+	default:
+		return false
+	}
+
+	switch scopes := sess.Get(KeyUserScope).(type) {
+	case nil:
+		return true
+	case []string:
+		return len(scopes) == 0
+	default:
+		return false
 	}
 }
 

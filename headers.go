@@ -26,22 +26,27 @@ func (b *AuthHeaderBuilder) BuildHeaders(result *AuthResult) map[string]string {
 		return headers
 	}
 
-	// Set primary user header
-	if result.UserID != "" {
-		headers[b.config.UserHeaderName] = sanitizeHeaderValue(result.UserID)
-		headers[b.config.AuthUserHeader] = sanitizeHeaderValue(result.UserID)
+	// Set primary user header.
+	//
+	// An unrepresentable user id is treated as no id at all, which is what the
+	// existing empty-id branch already does: the request is still known to be
+	// authenticated, but nothing downstream is told WHO by a value this
+	// package cannot vouch for.
+	if id, ok := safeHeaderValue(result.UserID); ok && id != "" {
+		headers[b.config.UserHeaderName] = id
+		headers[b.config.AuthUserHeader] = id
 	} else {
 		headers[b.config.UserHeaderName] = "authenticated"
 	}
 
 	// Set email header
-	if result.Email != "" {
-		headers[b.config.AuthEmailHeader] = sanitizeHeaderValue(result.Email)
+	if email, ok := safeHeaderValue(result.Email); ok && email != "" {
+		headers[b.config.AuthEmailHeader] = email
 	}
 
 	// Set name header
-	if result.Name != "" && b.config.AuthNameHeader != "" {
-		headers[b.config.AuthNameHeader] = sanitizeHeaderValue(result.Name)
+	if name, ok := safeHeaderValue(result.Name); ok && name != "" && b.config.AuthNameHeader != "" {
+		headers[b.config.AuthNameHeader] = name
 	}
 
 	// Set scopes header (comma-separated).
@@ -55,8 +60,8 @@ func (b *AuthHeaderBuilder) BuildHeaders(result *AuthResult) map[string]string {
 	}
 
 	// Set role header
-	if result.Role != "" {
-		headers[b.config.AuthRoleHeader] = sanitizeHeaderValue(result.Role)
+	if role, ok := safeHeaderValue(result.Role); ok && role != "" {
+		headers[b.config.AuthRoleHeader] = role
 	}
 
 	// Set AMR header (comma-separated)
@@ -67,13 +72,18 @@ func (b *AuthHeaderBuilder) BuildHeaders(result *AuthResult) map[string]string {
 	return headers
 }
 
+// unsafeHeaderChars cannot appear in a header value: CR and LF would end the
+// field and begin another, and NUL terminates or is rejected outright
+// depending on what reads the header next.
+const unsafeHeaderChars = "\r\n\x00"
+
 // sanitizeList drops entries that cannot be represented safely in a
-// comma-separated header value: ones containing the separator, or control
-// characters that would let a value break out of the header.
+// comma-separated header value: ones containing the separator, or characters
+// that would let a value break out of the header.
 func sanitizeList(values []string) []string {
 	out := make([]string, 0, len(values))
 	for _, v := range values {
-		if strings.ContainsAny(v, ",\r\n") || strings.TrimSpace(v) == "" {
+		if strings.ContainsAny(v, ","+unsafeHeaderChars) || strings.TrimSpace(v) == "" {
 			continue
 		}
 		out = append(out, strings.TrimSpace(v))
@@ -81,15 +91,20 @@ func sanitizeList(values []string) []string {
 	return out
 }
 
-// sanitizeHeaderValue strips characters that would let a value break out of a
-// single header field.
-func sanitizeHeaderValue(v string) string {
-	return strings.Map(func(r rune) rune {
-		if r == '\r' || r == '\n' || r == 0 {
-			return -1
-		}
-		return r
-	}, v)
+// safeHeaderValue returns v and whether it can be emitted as a header value.
+//
+// An unsafe value is DROPPED, not repaired. Deleting the offending characters
+// joins what surrounded them into a different, well-formed value the caller
+// never held: a role of "ad\r\nmin" came out as "X-Auth-Role: admin", turning
+// a malformed directory entry into the exact privileged token a downstream
+// service authorizes -- so the repair was strictly worse than emitting
+// nothing. sanitizeList has always dropped such entries; this is the scalar
+// half of the same rule.
+func safeHeaderValue(v string) (string, bool) {
+	if strings.ContainsAny(v, unsafeHeaderChars) {
+		return "", false
+	}
+	return v, true
 }
 
 // SetHeaders sets the authentication headers on the context.

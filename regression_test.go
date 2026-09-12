@@ -1143,3 +1143,152 @@ func TestEmptyStepUpPatternsProtectNothing(t *testing.T) {
 		t.Errorf("err = %v, want ErrStepUpRequired once a path is protected", err)
 	}
 }
+
+// --- Codex review round 15 (PR #4) ---
+
+// TestUnsafeHeaderValuesAreDroppedNotSpliced is the regression test for
+// repairing a header value by deleting the offending characters.
+//
+// strings.Map with -1 removes the rune and JOINS what surrounded it, so
+// "ad\r\nmin" was emitted as "X-Auth-Role: admin" -- a malformed directory
+// entry turned into the exact privileged token a downstream service
+// authorizes. No character sequence should be able to become a DIFFERENT
+// well-formed value on the way out; an unrepresentable value is dropped.
+func TestUnsafeHeaderValuesAreDroppedNotSpliced(t *testing.T) {
+	builder := NewAuthHeaderBuilder(&Config{
+		UserHeaderName:   "X-Forwarded-User",
+		AuthUserHeader:   "X-Auth-User",
+		AuthEmailHeader:  "X-Auth-Email",
+		AuthNameHeader:   "X-Auth-Name",
+		AuthRoleHeader:   "X-Auth-Role",
+		AuthScopesHeader: "X-Auth-Scopes",
+		AuthAMRHeader:    "X-Auth-AMR",
+	})
+
+	for _, unsafe := range []string{
+		"ad\r\nmin",              // the reported splice
+		"ad\nmin",                // LF alone
+		"ad\rmin",                // CR alone
+		"ad\x00min",              // NUL
+		"admin\r\nX-Injected: 1", // and the header-injection shape it came from
+	} {
+		t.Run(unsafe, func(t *testing.T) {
+			headers := builder.BuildHeaders(&AuthResult{
+				Authenticated: true,
+				UserID:        unsafe,
+				Email:         unsafe,
+				Name:          unsafe,
+				Role:          unsafe,
+				Scopes:        []string{unsafe, "read"},
+				AMR:           []string{unsafe, "pwd"},
+			})
+
+			for name, value := range headers {
+				if strings.ContainsAny(value, "\r\n\x00") {
+					t.Errorf("%s = %q still carries a control character", name, value)
+				}
+				// The splice, which is the actual defect: the value came out
+				// as something the caller never held.
+				if value == "admin" || strings.Contains(value, "adminX-Injected") {
+					t.Errorf("%s = %q -- the unsafe value was spliced into a different one", name, value)
+				}
+			}
+
+			// Dropped, not emitted empty or repaired.
+			for _, name := range []string{"X-Auth-User", "X-Auth-Email", "X-Auth-Name", "X-Auth-Role"} {
+				if got, ok := headers[name]; ok {
+					t.Errorf("%s = %q, want the header to be absent", name, got)
+				}
+			}
+			// The identity is unusable, so the request reads as authenticated
+			// without naming anyone -- the same answer an empty UserID gets.
+			if got := headers["X-Forwarded-User"]; got != "authenticated" {
+				t.Errorf("X-Forwarded-User = %q, want %q", got, "authenticated")
+			}
+			// A safe sibling in the same list still survives.
+			if got := headers["X-Auth-Scopes"]; got != "read" {
+				t.Errorf("X-Auth-Scopes = %q, want %q", got, "read")
+			}
+			if got := headers["X-Auth-AMR"]; got != "pwd" {
+				t.Errorf("X-Auth-AMR = %q, want %q", got, "pwd")
+			}
+		})
+	}
+
+	// The control: safe values are untouched, including ones with characters
+	// that merely look suspicious.
+	headers := builder.BuildHeaders(&AuthResult{
+		Authenticated: true,
+		UserID:        "user@example.com",
+		Role:          "admin",
+		Name:          "Ada Lovelace",
+		Scopes:        []string{"read", "write"},
+	})
+	if got := headers["X-Auth-Role"]; got != "admin" {
+		t.Errorf("X-Auth-Role = %q, want %q -- safe values must still pass", got, "admin")
+	}
+	if got := headers["X-Auth-Name"]; got != "Ada Lovelace" {
+		t.Errorf("X-Auth-Name = %q, want %q", got, "Ada Lovelace")
+	}
+}
+
+// countingSession records how many times a session was persisted.
+type countingSession struct {
+	*mockSession
+	saves int
+}
+
+func (s *countingSession) Save() error {
+	s.saves++
+	return s.mockSession.Save()
+}
+
+// TestFailedRefreshSavesOnlyWhatItChanges is the regression test for writing
+// the same cleared authorization on every request of an outage.
+//
+// KeyAuthRefreshedAt is deliberately not advanced when a refresh fails, so
+// every subsequent request retries and lands in the clearing branch again.
+// That branch saved unconditionally, so a directory outage became sustained
+// write traffic against the session backend -- one write per request, all of
+// them storing the empty scope and role already stored.
+func TestFailedRefreshSavesOnlyWhatItChanges(t *testing.T) {
+	handler := NewHandler(&Config{
+		SessionEnabled:        true,
+		AuthRefreshEnabled:    true,
+		HeaderAuthGetInfoFunc: func(phone, mail string) *UserInfo { return nil },
+	})
+
+	sess := &countingSession{mockSession: newMockSession()}
+	sess.data[KeyAuthenticated] = true
+	sess.data[KeyUserPhone] = "1234567890"
+	sess.data[KeyUserScope] = []string{"read", "write"}
+	sess.data[KeyUserRole] = "admin"
+
+	const requests = 25
+	for i := 0; i < requests; i++ {
+		result := &AuthResult{Authenticated: true}
+		handler.refreshAuthInfo(newMockContext(), sess, result)
+
+		// Every pass still clears, whether or not it writes.
+		if result.Scopes != nil || result.Role != "" || !result.AuthRefreshFailed {
+			t.Fatalf("request %d: authorization was not cleared: %+v", i, result)
+		}
+	}
+
+	if sess.saves != 1 {
+		t.Errorf("saves = %d over %d failed refreshes, want 1", sess.saves, requests)
+	}
+	if scopes, _ := sess.data[KeyUserScope].([]string); len(scopes) != 0 {
+		t.Errorf("session scopes = %v, want empty", scopes)
+	}
+	if role, _ := sess.data[KeyUserRole].(string); role != "" {
+		t.Errorf("session role = %q, want empty", role)
+	}
+
+	// Authorization coming back is a change again, and is persisted.
+	sess.data[KeyUserRole] = "admin"
+	handler.refreshAuthInfo(newMockContext(), sess, &AuthResult{Authenticated: true})
+	if sess.saves != 2 {
+		t.Errorf("saves = %d after authorization reappeared, want 2", sess.saves)
+	}
+}
