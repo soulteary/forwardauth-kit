@@ -1670,6 +1670,27 @@ func TestUnmatchedQuoteOnlyDiscardsItsOwnTail(t *testing.T) {
 		}
 	})
 
+	// A malformed range followed by a range carrying its own quoted parameter.
+	// The quotes pair up so that the second range's opening quote looks like
+	// the first's close, and its closing quote looks like a fresh open -- so
+	// the LAST quote opened is far too late a boundary and swallows the JSON
+	// range into the refused HTML one.
+	//
+	// This header and the one above are structurally identical: three quotes,
+	// the same pairing, no separator completed. They want opposite boundaries,
+	// which is why the choice is made on the result and not on the quotes.
+	t.Run("a later range's own quotes are not the boundary", func(t *testing.T) {
+		ctx := newMockContext()
+		ctx.headers["Accept"] = `text/html;q=0;foo="oops, application/json;profile="x";q=1, application/xml;q=0`
+
+		if ranges := parseAccept(ctx.headers["Accept"]); len(ranges) != 3 {
+			t.Fatalf("parsed %d ranges, want 3: %+v", len(ranges), ranges)
+		}
+		if got := GetPreferredFormat(ctx); got != "json" {
+			t.Errorf("GetPreferredFormat = %q, want json -- it is the only range not refused", got)
+		}
+	})
+
 	// The case the recovery was added for still works: when the quote opens
 	// before any separator, there is no valid prefix to keep and the whole
 	// string is re-read.

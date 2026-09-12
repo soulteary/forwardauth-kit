@@ -63,16 +63,15 @@ type acceptRange struct {
 func parseAccept(header string) []acceptRange {
 	var ranges []acceptRange
 
-	for i, part := range splitOutsideQuotes(header, ',') {
-		fields := splitOutsideQuotes(part, ';')
-		typ, sub, ok := strings.Cut(strings.ToLower(strings.TrimSpace(fields[0])), "/")
-		if !ok || typ == "" || sub == "" {
+	for i, part := range splitRanges(header) {
+		typ, sub, params, ok := mediaRangeFields(part)
+		if !ok {
 			continue
 		}
 
 		quality, seenQ, unhonourable := 1.0, false, false
-		params := 0
-		for _, param := range fields[1:] {
+		matched := 0
+		for _, param := range params {
 			name, value, hasValue := strings.Cut(param, "=")
 			name = strings.TrimSpace(name)
 
@@ -97,7 +96,7 @@ func parseAccept(header string) []acceptRange {
 			// UTF-8, so charset=utf-8 is one it genuinely satisfies.
 			if hasValue && strings.EqualFold(name, "charset") &&
 				strings.EqualFold(unquoteParam(strings.TrimSpace(value)), "utf-8") {
-				params++
+				matched++
 				continue
 			}
 			unhonourable = true
@@ -105,7 +104,7 @@ func parseAccept(header string) []acceptRange {
 
 		ranges = append(ranges, acceptRange{
 			typ: typ, sub: sub, quality: quality, order: i,
-			params: params, unhonourable: unhonourable,
+			params: matched, unhonourable: unhonourable,
 		})
 	}
 
@@ -197,8 +196,20 @@ func parseQValue(v string) (float64, bool) {
 	return float64(thousandths) / 1000, true
 }
 
-// splitOutsideQuotes splits on sep, ignoring separators inside a quoted
-// string.
+// mediaRangeFields splits one media range into its type, subtype and
+// parameters, reporting whether it names a media range at all.
+//
+// parseAccept decides what a range means with this, and splitRanges counts how
+// many ranges a recovery preserved with it. They have to agree on what counts
+// as a range, so they ask the same function rather than each spelling out the
+// test.
+func mediaRangeFields(part string) (typ, sub string, params []string, ok bool) {
+	fields := splitOutsideQuotes(part, ';')
+	typ, sub, cut := strings.Cut(strings.ToLower(strings.TrimSpace(fields[0])), "/")
+	return typ, sub, fields[1:], cut && typ != "" && sub != ""
+}
+
+// scanQuoteAware splits s on sep, ignoring separators inside a quoted string.
 //
 // A media-type parameter value may be a quoted-string (RFC 9110 5.6.6), and it
 // may contain the very characters that delimit the list:
@@ -209,62 +220,99 @@ func parseQValue(v string) (float64, bool) {
 // lost and HTML is recorded at the default weight of 1 -- the tie-break then
 // picks HTML and redirects a client that explicitly refused it. A backslash
 // escapes the next character inside a quoted string, so it is skipped too.
-func splitOutsideQuotes(s string, sep byte) []string {
-	var (
-		parts      []string
-		start      int
-		quoteStart int
-		inQuote    bool
-	)
+//
+// When the string ends inside a quote it is malformed. The parts completed
+// before the unterminated one are returned along with where that part begins
+// and the offset of every quote in it -- the candidate boundaries a caller can
+// recover from.
+func scanQuoteAware(s string, sep byte) (parts []string, start int, quotes []int, balanced bool) {
+	inQuote := func() bool { return len(quotes)%2 == 1 }
 
 	for i := 0; i < len(s); i++ {
 		switch {
-		case inQuote && s[i] == '\\' && i+1 < len(s):
+		case inQuote() && s[i] == '\\' && i+1 < len(s):
 			i++ // the escaped character is never a delimiter
 		case s[i] == '"':
-			if !inQuote {
-				quoteStart = i
-			}
-			inQuote = !inQuote
-		case s[i] == sep && !inQuote:
+			quotes = append(quotes, i)
+		case s[i] == sep && !inQuote():
 			parts = append(parts, s[start:i])
 			start = i + 1
+			quotes = quotes[:0] // only the current part offers boundaries
 		}
 	}
 
-	if inQuote {
-		// The quote was never closed, so quoting cannot be trusted from the
-		// point it opened -- and only from there. The parts already emitted
-		// were split on separators sitting outside a BALANCED quoted string,
-		// so they are not in doubt; only the unterminated tail is re-read
-		// without quote awareness. Treating the tail as one quoted run let a
-		// single stray quote swallow every later media range, so
-		// `text/html;q=0;profile="oops, application/json;q=1` parsed as one
-		// refused HTML range and the JSON the client actually asked for
-		// disappeared.
-		//
-		// Re-splitting the WHOLE string here instead was the same mistake
-		// pointed the other way: one stray quote late in a header corrupted
-		// every range before it. `text/html;profile="a,b";q=0,
-		// application/json;profile="oops` lost the HTML range's q=0 to the
-		// comma inside its own perfectly valid quoted string, and the refused
-		// HTML was then what GetPreferredFormat returned.
-		//
-		// Recovering from the last emitted separator is not far enough
-		// either, because a balanced quoted string can sit before the
-		// unmatched one INSIDE the same unemitted part:
-		// `text/html;profile="a,b";q=0;foo="oops, application/json;q=0` has
-		// emitted nothing yet, and re-reading from the start tore that range
-		// on the comma in profile. Nothing before the opening quote can
-		// contain a separator this loop did not already act on, so that is
-		// the earliest point anything is in doubt, and the earliest point
-		// worth re-reading.
-		recovered := strings.Split(s[quoteStart:], string(sep))
-		recovered[0] = s[start:quoteStart] + recovered[0]
-		return append(parts, recovered...)
+	return parts, start, quotes, !inQuote()
+}
+
+// recoverFrom rebuilds the split of s as though quoting meant nothing from
+// offset q onward, keeping the parts completed before start.
+func recoverFrom(s string, sep byte, parts []string, start, q int) []string {
+	recovered := strings.Split(s[q:], string(sep))
+	recovered[0] = s[start:q] + recovered[0]
+	return append(append([]string(nil), parts...), recovered...)
+}
+
+// splitOutsideQuotes splits on sep, ignoring separators inside a quoted
+// string. See scanQuoteAware.
+//
+// Its recovery is the cheap one: re-read from the last quote opened. This
+// splits a media range into its parameters, where an unmatched quote can merge
+// two PARAMETERS and no more. splitRanges, where the same malformation can
+// merge two whole ranges, chooses its boundary by what the reading produces.
+func splitOutsideQuotes(s string, sep byte) []string {
+	parts, start, quotes, balanced := scanQuoteAware(s, sep)
+	if balanced {
+		return append(parts, s[start:])
+	}
+	return recoverFrom(s, sep, parts, start, quotes[len(quotes)-1])
+}
+
+// splitRanges splits an Accept header into media ranges.
+//
+// An unmatched quote makes the header malformed, and RFC 9110 defines no
+// reading for it. It does not make every range in the header meaningless
+// though, and a wrong guess does concrete damage: a range swallowed into its
+// neighbour takes on that neighbour's weight, so a client's q=0 refusal can
+// come back as an acceptance, or the reverse.
+//
+// Three boundaries were tried here, and each was right for the header that
+// prompted it and wrong for the next: the whole header, the last completed
+// separator, the last quote opened. The last two failing headers are
+// structurally identical -- three quotes, same pairing, no separator completed
+// -- and want opposite answers, so no rule reading only the quotes can serve
+// both. This one reads the result instead: try every quote in the
+// unterminated part as the boundary and keep whichever reading leaves the most
+// parseable media ranges, since losing ranges is the damage being avoided.
+// Ties go to the latest boundary, which disturbs the least.
+func splitRanges(header string) []string {
+	parts, start, quotes, balanced := scanQuoteAware(header, ',')
+	if balanced {
+		return append(parts, header[start:])
 	}
 
-	return append(parts, s[start:])
+	var (
+		best      []string
+		bestCount = -1
+	)
+	for _, q := range quotes {
+		candidate := recoverFrom(header, ',', parts, start, q)
+		if count := countMediaRanges(candidate); count >= bestCount {
+			best, bestCount = candidate, count
+		}
+	}
+	return best
+}
+
+// countMediaRanges reports how many of the parts name a media range, which is
+// the measure of how much a recovery preserved.
+func countMediaRanges(parts []string) int {
+	count := 0
+	for _, part := range parts {
+		if _, _, _, ok := mediaRangeFields(part); ok {
+			count++
+		}
+	}
+	return count
 }
 
 // bestRange returns the range that speaks for mediaType.
