@@ -69,6 +69,16 @@ type Config struct {
 	// When this is false and a request carries X-Forwarded-Uri, step-up is
 	// required unconditionally: an attacker-chosen target cannot be shown to
 	// be unprotected, so the safe answer is to treat it as protected.
+	//
+	// Step-up also requires a forwarded target to match at all. A request
+	// whose X-Forwarded-Uri is missing, empty, or carries no path component is
+	// treated as protected under either setting -- Context.Get cannot tell an
+	// absent header from an empty one, so a client could otherwise send a bare
+	// "X-Forwarded-Uri:" and have the question asked about the auth endpoint
+	// instead of the route it is really requesting. A proxy that never sets
+	// the header therefore prompts for step-up on every request; step-up was
+	// already inert in that deployment, testing /_auth against the patterns
+	// each time, and this is what makes that visible.
 	StepUpForwardedURITrusted bool
 
 	// HeaderAuthAllowUntrustedHeaders acknowledges that the identity headers

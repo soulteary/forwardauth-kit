@@ -295,21 +295,37 @@ func (h *Handler) GetConfig() *Config {
 // so "this route is not protected" is not a conclusion that can be drawn from
 // it. Such a request is treated as protected: failing closed costs a step-up
 // prompt, failing open costs the control entirely.
+//
+// A request carrying no usable forwarded path is treated as protected for the
+// same reason, and this is why it does not fall back to the request's own path.
+// Context.Get cannot tell an absent header from one present and empty -- Go's
+// http.Header and Fiber both answer "" for each -- so neither can this, and an
+// authenticated client only had to send a bare "X-Forwarded-Uri:" to turn the
+// question into one about the auth endpoint. In a ForwardAuth deployment that
+// endpoint is at a fixed path (/_auth in the README's own Traefik and nginx
+// configurations), it matches no step-up pattern, and so the fallback could
+// only ever answer "not protected" -- for the forged request and the honest
+// one alike.
+//
+// The cost is that a proxy which does not set X-Forwarded-Uri at all now gets
+// a step-up prompt on every request. That deployment had no working step-up
+// control to begin with, for exactly the reason above: every path it tested
+// was /_auth. A prompt is how that misconfiguration becomes visible instead of
+// silently disabling the control.
 func (h *Handler) stepUpRequiredFor(c Context) bool {
 	forwarded := c.Get("X-Forwarded-Uri")
-	if forwarded != "" && !h.config.StepUpForwardedURITrusted {
+	raw := forwardedPath(forwarded)
+	if raw == "" || !h.config.StepUpForwardedURITrusted {
 		return true
 	}
 	// Both spellings: the bytes as forwarded, and the decoded/cleaned path a
 	// downstream router routes on. Either one matching means step-up, so an
 	// encoded "/%61dmin/settings" cannot slip past a "/admin/*" pattern that
 	// the router itself will honour.
-	uri := h.forwarded.GetURI(c)
-	raw := forwardedPath(uri)
 	if h.stepUpMatcher.RequiresStepUp(raw) {
 		return true
 	}
-	if canonical := canonicalForwardedPath(uri); canonical != raw {
+	if canonical := canonicalForwardedPath(forwarded); canonical != raw {
 		return h.stepUpMatcher.RequiresStepUp(canonical)
 	}
 	return false

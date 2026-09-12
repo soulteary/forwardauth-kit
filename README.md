@@ -134,7 +134,10 @@ config := forwardauth.Config{
     // $request_uri` does). A proxy that merely forwards a client-supplied
     // value -- Traefik's trustForwardHeader: true -- lets a client send
     // "X-Forwarded-Uri: /public" and skip step-up, so when this is false any
-    // request carrying the header is treated as protected.
+    // request carrying the header is treated as protected. A request with no
+    // usable forwarded path -- header absent, empty, or query-only -- is
+    // treated as protected under either setting, because there is no target
+    // to match and the auth endpoint's own path is not one.
     StepUpForwardedURITrusted: true,
     StepUpURL:        "/_step_up",
     StepUpSessionKey: "step_up_verified",
@@ -178,7 +181,7 @@ handler := forwardauth.NewHandler(&config)
 | `StepUpPaths` | []string | - | Glob patterns for protected paths |
 | `StepUpURL` | string | "/_step_up" | Step-up verification URL |
 | `StepUpSessionKey` | string | "step_up_verified" | Session key for step-up flag |
-| `StepUpForwardedURITrusted` | bool | false | The proxy overwrites `X-Forwarded-Uri`; when false, any request carrying it is treated as protected |
+| `StepUpForwardedURITrusted` | bool | false | The proxy overwrites `X-Forwarded-Uri`; when false, any request carrying it is treated as protected. A request with no usable forwarded path is protected either way |
 | `HeaderAuthTrustFunc` | func(Context) bool | nil | Which requests may supply identity headers. Required unless `HeaderAuthAllowUntrustedHeaders` is set |
 | `HeaderAuthAllowUntrustedHeaders` | bool | false | Accept identity headers from any caller |
 | `AuthRefreshEnabled` | bool | false | Enable auth info refresh |

@@ -329,12 +329,13 @@ func TestUntrustedForwardedURICannotSkipStepUp(t *testing.T) {
 		t.Error("trusted forwarded URI: step-up fired on an unprotected route")
 	}
 
-	// With no forwarded header at all there is nothing client-chosen to
-	// distrust, so the fallback to the request path still applies.
+	// A request with no forwarded header carries no target to match, so it is
+	// protected too -- see TestEmptyForwardedURICannotSkipStepUp for why the
+	// request's own path cannot stand in for one.
 	bare := newMockContext()
 	bare.path = "/public"
-	if _, err := newHandler(false).Check(bare, authed()); errors.Is(err, ErrStepUpRequired) {
-		t.Error("step-up fired on an unprotected path with no forwarded header")
+	if _, err := newHandler(false).Check(bare, authed()); !errors.Is(err, ErrStepUpRequired) {
+		t.Errorf("no forwarded header: err = %v, want ErrStepUpRequired -- there is no target to call unprotected", err)
 	}
 }
 
@@ -1008,6 +1009,75 @@ func TestChosenFormatIsAlwaysReportedAsAskedFor(t *testing.T) {
 				if !IsXMLRequest(ctx) {
 					t.Errorf("GetPreferredFormat(%q) sends XML but IsXMLRequest is false", accept)
 				}
+			}
+		})
+	}
+}
+
+// --- Codex review round 13 (PR #4) ---
+
+// TestEmptyForwardedURICannotSkipStepUp is the regression test for reading an
+// empty X-Forwarded-Uri as an absent one.
+//
+// Context.Get answers "" for a header that was never sent and for one sent
+// with an empty value alike -- Go's http.Header and Fiber both do -- so the
+// round-2 guard, which only fired on a non-empty value, let an authenticated
+// client send a bare "X-Forwarded-Uri:" and fall through to the request's own
+// path. In a ForwardAuth deployment that path is the fixed auth endpoint, it
+// matches no step-up pattern, and the answer was "not protected" for a request
+// really targeting /admin/settings.
+func TestEmptyForwardedURICannotSkipStepUp(t *testing.T) {
+	newHandler := func(trusted bool) *Handler {
+		return NewHandler(&Config{
+			SessionEnabled:            true,
+			StepUpEnabled:             true,
+			StepUpPaths:               []string{"/admin/*"},
+			StepUpSessionKey:          "step_up_verified",
+			StepUpForwardedURITrusted: trusted,
+		})
+	}
+	authed := func() *mockSession {
+		sess := newMockSession()
+		sess.data[KeyAuthenticated] = true
+		return sess
+	}
+
+	for _, tc := range []struct {
+		name     string
+		trusted  bool
+		path     string
+		uri      string
+		wantStep bool
+	}{
+		// The reported case, under both trust settings: a proxy that forwards
+		// the client's header verbatim, and one declared to overwrite it but
+		// that sent nothing to overwrite it with.
+		{"untrusted empty value", false, "/_auth", "", true},
+		{"trusted empty value", true, "/_auth", "", true},
+
+		// The request path is never the target, whatever it says. Reaching for
+		// it is the defect, so an unprotected-looking path does not rescue the
+		// empty header.
+		{"empty value on an unprotected path", true, "/public", "", true},
+
+		// A value whose PATH component is empty is the same situation spelled
+		// differently, and forwardedPath strips both of these to "".
+		{"query only", true, "/_auth", "?tab=keys", true},
+		{"fragment only", true, "/_auth", "#section", true},
+
+		// The precision that has to survive: a trusted proxy naming a real
+		// unprotected target still skips step-up.
+		{"trusted unprotected target", true, "/_auth", "/public", false},
+		{"trusted protected target", true, "/_auth", "/admin/settings", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := newMockContext()
+			ctx.path = tc.path
+			ctx.headers["X-Forwarded-Uri"] = tc.uri
+
+			_, err := newHandler(tc.trusted).Check(ctx, authed())
+			if got := errors.Is(err, ErrStepUpRequired); got != tc.wantStep {
+				t.Errorf("step-up required = %v, want %v (err = %v)", got, tc.wantStep, err)
 			}
 		})
 	}

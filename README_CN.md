@@ -129,6 +129,9 @@ config := forwardauth.Config{
     // 若代理只是原样转发客户端提供的值（如 Traefik 的 trustForwardHeader: true），
     // 客户端就能发送 "X-Forwarded-Uri: /public" 绕过二次验证；
     // 因此该项为 false 时，任何携带此 Header 的请求都会被当作受保护路由。
+    // 另外，无论该项取值如何，只要请求没有可用的转发路径（Header 缺失、
+    // 为空，或只有查询串），都会被当作受保护路由：此时没有可匹配的目标，
+    // 而认证端点自身的路径并不是目标。
     StepUpForwardedURITrusted: true,
     StepUpURL:        "/_step_up",
     StepUpSessionKey: "step_up_verified",
@@ -172,6 +175,7 @@ handler := forwardauth.NewHandler(&config)
 | `StepUpPaths` | []string | - | 受保护路径 Glob 模式 |
 | `StepUpURL` | string | "/_step_up" | Step-up 验证 URL |
 | `StepUpSessionKey` | string | "step_up_verified" | Step-up 标志 Session 键 |
+| `StepUpForwardedURITrusted` | bool | false | 代理会覆盖 `X-Forwarded-Uri`；为 false 时，任何携带该 Header 的请求都按受保护处理。没有可用转发路径的请求在两种取值下都按受保护处理 |
 | `AuthRefreshEnabled` | bool | false | 启用授权刷新 |
 | `AuthRefreshInterval` | Duration | 5m | 刷新间隔 |
 | `UserHeaderName` | string | "X-Forwarded-User" | 主用户 Header |
