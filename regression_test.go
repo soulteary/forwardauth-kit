@@ -1619,3 +1619,106 @@ func TestQuotedPairsDecodeInParameterValues(t *testing.T) {
 		}
 	}
 }
+
+// --- Codex review round 22 (PR #4) ---
+
+// TestUnmatchedQuoteOnlyDiscardsItsOwnTail is the regression test for the
+// unmatched-quote recovery throwing away more than the malformed range.
+//
+// The recovery re-split the WHOLE header without quote awareness, so one
+// stray quote late in a header corrupted every range before it:
+// `text/html;profile="a,b";q=0, application/json;profile="oops` lost the HTML
+// range's q=0 to the comma inside its own perfectly valid quoted string, and
+// the refused HTML was what GetPreferredFormat returned.
+//
+// Parts already emitted were split on separators outside a BALANCED quoted
+// string, so they are not in doubt. Only the unterminated tail is re-read.
+func TestUnmatchedQuoteOnlyDiscardsItsOwnTail(t *testing.T) {
+	t.Run("a valid prefix survives a malformed tail", func(t *testing.T) {
+		ctx := newMockContext()
+		ctx.headers["Accept"] = `text/html;profile="a,b";q=0, application/json;profile="oops`
+
+		ranges := parseAccept(ctx.headers["Accept"])
+		if len(ranges) != 2 {
+			t.Fatalf("parsed %d ranges, want 2: %+v", len(ranges), ranges)
+		}
+		if ranges[0].quality != 0 {
+			t.Errorf("the HTML range's q=0 was lost: quality = %v, want 0", ranges[0].quality)
+		}
+		if got := GetPreferredFormat(ctx); got != "json" {
+			t.Errorf("GetPreferredFormat = %q, want json -- HTML was refused", got)
+		}
+	})
+
+	// The case the recovery was added for still works: when the quote opens
+	// before any separator, there is no valid prefix to keep and the whole
+	// string is re-read.
+	t.Run("no valid prefix to keep", func(t *testing.T) {
+		ctx := newMockContext()
+		ctx.headers["Accept"] = `text/html;q=0;profile="oops, application/json;q=1`
+
+		if got := GetPreferredFormat(ctx); got != "json" {
+			t.Errorf("GetPreferredFormat = %q, want json", got)
+		}
+	})
+}
+
+// TestQValueGrammarIsNarrowerThanAFloat is the regression test for reading a
+// weight with strconv.ParseFloat.
+//
+//	qvalue = ( "0" [ "." 0*3DIGIT ] ) / ( "1" [ "." 0*3("0") ] )
+//
+// ParseFloat accepted spellings that grammar excludes, so "q=1e-1" became a
+// real priority of 0.1 and "application/json;q=1e-1, text/html;q=0.5"
+// answered HTML off a weight the client never expressed. A malformed
+// parameter is ignored, so the default weight of 1 stands and JSON wins.
+func TestQValueGrammarIsNarrowerThanAFloat(t *testing.T) {
+	for _, tc := range []struct {
+		in    string
+		want  float64
+		valid bool
+	}{
+		// Valid spellings.
+		{"0", 0, true}, {"1", 1, true},
+		{"0.5", 0.5, true}, {"0.123", 0.123, true},
+		{"1.0", 1, true}, {"1.000", 1, true},
+		{"0.", 0, true}, {"1.", 1, true},
+
+		// Numeric to ParseFloat, not a qvalue.
+		{"1e-1", 0, false},   // the reported case
+		{".5", 0, false},     // no leading digit
+		{"0.1234", 0, false}, // more than three fractional digits
+		{"1.001", 0, false},  // 1 admits only zeros
+		{"1.5", 0, false},    // ...and this used to clamp to 1 silently
+		{"2", 0, false}, {"-0.5", 0, false}, {"+1", 0, false},
+		{"Inf", 0, false}, {"NaN", 0, false}, {"0x1", 0, false},
+		{"", 0, false}, {"abc", 0, false},
+	} {
+		got, ok := parseQValue(tc.in)
+		if ok != tc.valid {
+			t.Errorf("parseQValue(%q) valid = %v, want %v", tc.in, ok, tc.valid)
+			continue
+		}
+		if ok && got != tc.want {
+			t.Errorf("parseQValue(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+
+	// What it means for negotiation: a malformed weight is ignored, so the
+	// range keeps the default weight of 1 rather than gaining one the client
+	// never wrote.
+	for _, tc := range []struct{ accept, format string }{
+		{"application/json;q=1e-1, text/html;q=0.5", "json"},
+		{"application/json;q=.5, text/html;q=0.4", "json"},
+		{"application/json;q=0.1234, text/html;q=0.5", "json"},
+		// ...and a well-formed one still decides.
+		{"application/json;q=0.1, text/html;q=0.5", "html"},
+		{"application/json;q=0.123, text/html;q=0.5", "html"},
+	} {
+		ctx := newMockContext()
+		ctx.headers["Accept"] = tc.accept
+		if got := GetPreferredFormat(ctx); got != tc.format {
+			t.Errorf("GetPreferredFormat(%q) = %q, want %q", tc.accept, got, tc.format)
+		}
+	}
+}

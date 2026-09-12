@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"encoding/xml"
 	"fmt"
-	"math"
-	"strconv"
 	"strings"
 )
 
@@ -82,8 +80,8 @@ func parseAccept(header string) []acceptRange {
 				seenQ = true
 				// A malformed weight is not a refusal: RFC 9110 says to
 				// ignore the parameter, so the default weight stands.
-				if q, err := strconv.ParseFloat(strings.TrimSpace(value), 64); err == nil && q >= 0 {
-					quality = math.Min(q, 1)
+				if q, ok := parseQValue(strings.TrimSpace(value)); ok {
+					quality = q
 				}
 				continue
 			}
@@ -151,6 +149,54 @@ func unquoteParam(v string) string {
 	return unescaped.String()
 }
 
+// parseQValue parses an RFC 9110 12.4.2 qvalue, reporting whether it is one.
+//
+//	qvalue = ( "0" [ "." 0*3DIGIT ] ) / ( "1" [ "." 0*3("0") ] )
+//
+// That grammar is much narrower than a float, and strconv.ParseFloat accepted
+// the difference: "1e-1", ".5", "0.1234" and "Inf" all parsed. Reading them as
+// real priorities let "application/json;q=1e-1, text/html;q=0.5" answer HTML
+// off a weight of 0.1 the client never expressed -- a malformed parameter is
+// ignored, so the default weight of 1 should have stood and JSON won.
+//
+// The value is computed here rather than handed back to ParseFloat, so the
+// grammar is the only thing that decides what a weight means.
+func parseQValue(v string) (float64, bool) {
+	whole, frac, hasFrac := strings.Cut(v, ".")
+	if whole != "0" && whole != "1" {
+		return 0, false
+	}
+	if hasFrac && len(frac) > 3 {
+		return 0, false
+	}
+
+	for i := 0; i < len(frac); i++ {
+		// "1" admits only zeros after the point: 1.001 is not a weight, and
+		// silently clamping it to 1 would accept a header that says something
+		// the grammar cannot say.
+		if frac[i] < '0' || frac[i] > '9' || (whole == "1" && frac[i] != '0') {
+			return 0, false
+		}
+	}
+
+	if whole == "1" {
+		return 1, true
+	}
+
+	// Scaled to thousandths and divided once. Accumulating digit by digit --
+	// 1*0.1 + 2*0.01 + 3*0.001 -- lands on 0.12300000000000001, which is not
+	// the weight the client wrote, and the grammar allows no more precision
+	// than this anyway.
+	thousandths := 0
+	for i := 0; i < 3; i++ {
+		thousandths *= 10
+		if i < len(frac) {
+			thousandths += int(frac[i] - '0')
+		}
+	}
+	return float64(thousandths) / 1000, true
+}
+
 // splitOutsideQuotes splits on sep, ignoring separators inside a quoted
 // string.
 //
@@ -183,14 +229,23 @@ func splitOutsideQuotes(s string, sep byte) []string {
 	}
 
 	if inQuote {
-		// The quote was never closed, so the header is malformed and the
-		// quoting cannot be trusted to mean anything. Ignoring it entirely for
-		// this string is the recoverable reading: treating the rest as one
-		// quoted run let a single stray quote swallow every later media range,
-		// so `text/html;q=0;profile="oops, application/json;q=1` parsed as one
+		// The quote was never closed, so quoting cannot be trusted from the
+		// point it opened -- and only from there. The parts already emitted
+		// were split on separators sitting outside a BALANCED quoted string,
+		// so they are not in doubt; only the unterminated tail is re-read
+		// without quote awareness. Treating the tail as one quoted run let a
+		// single stray quote swallow every later media range, so
+		// `text/html;q=0;profile="oops, application/json;q=1` parsed as one
 		// refused HTML range and the JSON the client actually asked for
 		// disappeared.
-		return strings.Split(s, string(sep))
+		//
+		// Re-splitting the WHOLE string here instead was the same mistake
+		// pointed the other way: one stray quote late in a header corrupted
+		// every range before it. `text/html;profile="a,b";q=0,
+		// application/json;profile="oops` lost the HTML range's q=0 to the
+		// comma inside its own perfectly valid quoted string, and the refused
+		// HTML was then what GetPreferredFormat returned.
+		return append(parts, strings.Split(s[start:], string(sep))...)
 	}
 
 	return append(parts, s[start:])
