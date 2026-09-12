@@ -313,6 +313,15 @@ func (h *Handler) GetConfig() *Config {
 // was /_auth. A prompt is how that misconfiguration becomes visible instead of
 // silently disabling the control.
 func (h *Handler) stepUpRequiredFor(c Context) bool {
+	// Nothing is protected, so there is nothing to fail closed about. A
+	// matcher with no usable patterns answers false for every path by
+	// definition -- StepUpEnabled with an empty or all-blank StepUpPaths
+	// builds exactly that -- and the rule below would otherwise invert it into
+	// step-up on every route for a configuration asking for it on none.
+	if h.stepUpMatcher.PatternCount() == 0 {
+		return false
+	}
+
 	forwarded := c.Get("X-Forwarded-Uri")
 	raw := forwardedPath(forwarded)
 	if raw == "" || !h.config.StepUpForwardedURITrusted {

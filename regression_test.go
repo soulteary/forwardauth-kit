@@ -1082,3 +1082,64 @@ func TestEmptyForwardedURICannotSkipStepUp(t *testing.T) {
 		})
 	}
 }
+
+// TestEmptyStepUpPatternsProtectNothing pins the boundary of the fail-closed
+// rule above: it applies only where a step-up control actually exists.
+//
+// StepUpEnabled with no usable StepUpPaths -- unset, empty, or all blank --
+// builds a matcher with zero patterns, which RequiresStepUp answers false for
+// on every path by definition. Failing closed on a missing forwarded target
+// turned that into step-up on every route, so a configuration asking for
+// step-up on nothing demanded it everywhere.
+func TestEmptyStepUpPatternsProtectNothing(t *testing.T) {
+	authed := func() *mockSession {
+		sess := newMockSession()
+		sess.data[KeyAuthenticated] = true
+		return sess
+	}
+
+	for _, tc := range []struct {
+		name  string
+		paths []string
+	}{
+		{"unset", nil},
+		{"empty", []string{}},
+		{"blank entries", []string{"", "   "}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := NewHandler(&Config{
+				SessionEnabled:   true,
+				StepUpEnabled:    true,
+				StepUpPaths:      tc.paths,
+				StepUpSessionKey: "step_up_verified",
+			})
+			if got := h.stepUpMatcher.PatternCount(); got != 0 {
+				t.Fatalf("PatternCount() = %d, want 0; the premise has changed", got)
+			}
+
+			// The shape that fails closed when patterns DO exist: no usable
+			// forwarded target, on the auth endpoint.
+			ctx := newMockContext()
+			ctx.path = "/_auth"
+			ctx.headers["X-Forwarded-Uri"] = ""
+
+			if _, err := h.Check(ctx, authed()); errors.Is(err, ErrStepUpRequired) {
+				t.Error("step-up required with no protected paths configured")
+			}
+		})
+	}
+
+	// And the control: one real pattern restores the fail-closed rule.
+	h := NewHandler(&Config{
+		SessionEnabled:   true,
+		StepUpEnabled:    true,
+		StepUpPaths:      []string{"/admin/*"},
+		StepUpSessionKey: "step_up_verified",
+	})
+	ctx := newMockContext()
+	ctx.path = "/_auth"
+	ctx.headers["X-Forwarded-Uri"] = ""
+	if _, err := h.Check(ctx, authed()); !errors.Is(err, ErrStepUpRequired) {
+		t.Errorf("err = %v, want ErrStepUpRequired once a path is protected", err)
+	}
+}
