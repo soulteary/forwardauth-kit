@@ -2,7 +2,7 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/soulteary/forwardauth-kit/v2.svg)](https://pkg.go.dev/github.com/soulteary/forwardauth-kit/v2)
 [![Go Report Card](.github/goreportcard.svg)](.github/goreportcard-report.md)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![codecov](https://codecov.io/gh/soulteary/forwardauth-kit/graph/badge.svg)](https://codecov.io/gh/soulteary/forwardauth-kit)
 
 [English](README.md)
@@ -18,6 +18,11 @@ ForwardAuth 中间件库，用于反向代理认证。支持多种认证方式�
 - **灵活的 Header 映射**：可自定义认证响应头
 - **框架无关**：核心逻辑框架无关，内置 Fiber 适配器
 - **跨域支持**：跨域认证流程的 Cookie 工具
+
+## 环境要求
+
+- **Go 1.27+**（`go.mod` 声明 `go 1.27.0`）
+- `Fiber*` 适配器需要 Fiber v3.4.0 或更高版本；核心逻辑与框架无关
 
 ## 安装
 
@@ -66,11 +71,35 @@ func main() {
 config := forwardauth.Config{
     PasswordEnabled: true,
     PasswordHeader:  "Stargate-Password",
-    ValidPasswords:  []string{"HASHED_PASSWORD_1", "HASHED_PASSWORD_2"},
+    // 这里放的是明文，以常量时间比较。它们不是哈希。
+    // 必须按下面说的归一化规则预先处理好，否则永远匹配不上。
+    ValidPasswords: []string{"ACCESSCODE1", "ACCESSCODE2"},
 }
 
 handler := forwardauth.NewHandler(&config)
 ```
+
+**默认归一化会转大写并去掉空格**，这让比较变成大小写不敏感，丢掉了你可能以为还在的
+熵。它的形状是为邀请码/访问码（`"ABCD 1234"`）设计的，不是为密码。真正的密码请自己
+提供归一化函数：
+
+```go
+config.PasswordNormalizer = strings.TrimSpace // 或 nil 表示不做归一化
+```
+
+要对哈希校验而不是比对明文列表，请用 `PasswordCheckFunc`：
+
+```go
+config := forwardauth.Config{
+    PasswordEnabled: true,
+    PasswordCheckFunc: func(password string) bool {
+        return bcrypt.CompareHashAndPassword(stored, []byte(password)) == nil
+    },
+}
+```
+
+当 `PasswordEnabled` 为真而 `ValidPasswords` 与 `PasswordCheckFunc` 都没设置时，
+`Config.Validate()` 会报错。
 
 ### Header 认证（Warden 集成）
 
@@ -122,6 +151,10 @@ handler := forwardauth.NewHandler(&config)
 
 ### Step-up 认证
 
+Step-up 用 `StepUpPaths` 匹配的是**原始请求目标**——ForwardAuth 代理通过
+`X-Forwarded-Uri` 传过来的那个——而不是认证端点自己的路径。没有转发 URI 时回退到
+`Context.Path()`，因此直接（非代理）使用的行为不变。
+
 ```go
 config := forwardauth.Config{
     SessionEnabled:   true,
@@ -153,12 +186,28 @@ config := forwardauth.Config{
     AuthRefreshEnabled:  true,
     AuthRefreshInterval: 5 * time.Minute,
     HeaderAuthGetInfoFunc: func(phone, mail string) *forwardauth.UserInfo {
-        // 定期刷新用户信息
+        // 返回 nil 表示查询失败，或账号已不存在。
         return getUserFromWarden(phone, mail)
     },
 }
 
 handler := forwardauth.NewHandler(&config)
+```
+
+刷新会**替换**缓存的 scopes 和 role，而不是合并进去，因此把用户的 scopes 撤销为空、
+或清掉 role，都能真正生效。当 `HeaderAuthGetInfoFunc` 返回 `nil` 时，缓存的 scopes
+和 role 会被清除，并置上 `AuthResult.AuthRefreshFailed`——如果目录服务故障不应让一个
+已删除或已停用的账号继续有权限，就检查这个字段并拒绝请求：
+
+```go
+result, err := handler.Check(c, sess)
+if err != nil {
+    return err
+}
+if result.AuthRefreshFailed {
+    // 目录服务无法确认这个用户。失败即关闭。
+    return forwardauth.SendErrorResponse(c, http.StatusForbidden, "authorization unavailable")
+}
 ```
 
 ## 配置项
@@ -206,6 +255,61 @@ handler := forwardauth.NewHandler(&config)
 | `X-Auth-Scopes` | 逗号分隔的权限范围 | `read,write,admin` |
 | `X-Auth-Role` | 用户角色 | `admin` |
 | `X-Auth-AMR` | 使用的认证方法 | `otp,mfa` |
+
+输出的 header 值经过净化：CR 和 LF 会被剥掉，含逗号的 scope 或 AMR 值会被丢弃而不是
+输出——`X-Auth-Scopes` 是逗号分隔的，像 `read,admin` 这样的 scope 否则会在下游凭空
+多出一项权限。读回 header 请用 `ParseScopesFromHeader`。
+
+## 认证结果
+
+```go
+type AuthResult struct {
+    Authenticated     bool
+    UserID            string
+    Phone             string
+    Email             string
+    Name              string
+    Role              string
+    Scopes            []string
+    AMR               []string
+    AuthMethod        AuthMethod
+    NeedsRefresh      bool
+    RefreshedAt       time.Time
+    AuthRefreshFailed bool // 目录查询失败，应失败即关闭
+}
+```
+
+Scope 辅助函数：
+
+```go
+forwardauth.ScopesContain(result.Scopes, "admin")
+forwardauth.MergeScopesUnique(a, b)
+forwardauth.ParseScopesFromHeader("read,write,admin")
+```
+
+## 错误
+
+| 哨兵错误 | 含义 |
+|----------|------|
+| `ErrHeaderAuthTrustUnspecified` | 设置了 `HeaderAuthEnabled`，但既没给 `HeaderAuthTrustFunc` 也没给 `HeaderAuthAllowUntrustedHeaders`。由 `Config.Validate()` 返回——这个决定无法安全地取默认值。 |
+| `ErrInvalidConfig` | 配置不可用 |
+| `ErrNotAuthenticated` | 没有任何检查器通过认证 |
+| `ErrInvalidPassword` | 密码检查器拒绝了该值 |
+| `ErrForbidden` | 已认证但无权限 |
+
+请在启动时调用 `Config.Validate()`，这样缺失信任决定会让进程启动失败，而不是默默地
+信任客户端提供的身份 header。
+
+## 响应格式辅助函数
+
+```go
+forwardauth.IsJSONRequest(c)
+forwardauth.IsXMLRequest(c)
+forwardauth.IsHTMLRequest(c)
+forwardauth.GetPreferredFormat(c)          // "json" | "xml" | "html"
+forwardauth.SendErrorResponse(c, 403, msg) // message 会按所选格式转义
+forwardauth.NormalizeHost("[::1]:8080")    // "[::1]"
+```
 
 ## 自定义检查器
 
@@ -310,6 +414,51 @@ location = /_auth {
 另外 `forwardauth.Context` 并不暴露对端地址，这类校验需要在进入 handler
 之前、在你的适配层完成。
 
+## 升级说明（v2.2.0）
+
+**本次发布可能故意让你的服务启动失败。** 当设置了 `HeaderAuthEnabled` 时，
+`Config.Validate()` 现在会返回 `ErrHeaderAuthTrustUnspecified`，除非你提供
+`HeaderAuthTrustFunc` 或 `HeaderAuthAllowUntrustedHeaders` 之一。
+
+- **身份 header 现在必须显式做信任决定。** 只要值在允许列表里，`HeaderChecker`
+  就会基于 `X-User-Phone` / `X-User-Mail` 完成认证，而且优先级高于 session
+  检查器——任何能访问到这个端点的东西都能设置这些 header。README 旧的 nginx 示例
+  和 Traefik 的 `trustForwardHeader` 都不会剥掉客户端自己发来的自定义 header。
+  本库无法知道你的可信代理是谁，所以这个决定得由你说出来：
+  `ProxySecretTrustFunc("X-Proxy-Secret", secret)` 校验只有代理才能产生的东西，
+  或者 `HeaderAuthAllowUntrustedHeaders: true` 明确承认任何调用方都可以提供它们。
+  **同时请更新你的 nginx/Traefik 配置**——示例现在会清空身份 header 并注入密钥。
+- **Step-up 认证现在真的会触发。** 此前模式是拿 `Context.Path()` 来匹配的，而在
+  ForwardAuth 部署里它是固定的认证端点（`/_auth`），于是 `StepUpPaths` 什么都匹配不
+  到，每条受保护路径上的 step-up 都静默失效。现在改用转发 URI 匹配。**如果你原本
+  设置了 `StepUpEnabled`，step-up 会开始挑战此前被放过的请求。** 只有当你的代理会
+  *覆写* `X-Forwarded-Uri` 时才设置 `StepUpForwardedURITrusted: true`；为 false 时，
+  任何带该 header 的请求都被视为受保护。
+- **授权刷新现在能降权。** 它此前是合并而非替换，所以把 scopes 撤销为空、或清掉
+  role，旧值会在 session 的整个生命周期里留着。查询失败时只打了日志，于是一个已删除
+  的账号在查询持续失败期间一直保有权限。现在刷新会替换，返回 `nil` 则清除缓存的
+  scopes 和 role，并置上新增的 `AuthResult.AuthRefreshFailed`。
+- **含逗号的 scope 不再凭空多出权限。** `BuildHeaders` 用 `,` 连接 scopes 和 AMR，
+  而 `ParseScopesFromHeader` 按它切分。现在这类值会被丢弃，并且每个输出的 header
+  值都会剥掉 CR/LF。
+- **转义修复。** step-up 重定向把回调 URL（它包含 `://` 和自己的查询串）未转义地
+  插进了一个查询参数；`SendErrorResponse` 把 message 未转义地插进了 XML 标记。
+- **`NormalizeHost` 能处理 IPv6。** 它此前用 `strings.Index(host, ":")`，会把
+  `[::1]:8080` 截断成 `[`。现在改用 `net.SplitHostPort`。
+- **`ValidPasswords` 被明确写成明文**——它一直都是明文，尽管字段注释和 README 示例
+  把这些值称作哈希。默认密码归一化会转大写，使比较变成大小写不敏感；真正的密码请提供
+  `PasswordNormalizer`。
+
+## 测试
+
+```bash
+go test ./...
+
+# 带覆盖率
+go test ./... -coverprofile=coverage.out -covermode=atomic
+go tool cover -func=coverage.out
+```
+
 ## 许可证
 
-MIT License
+Apache License 2.0 —— 详见 [LICENSE](LICENSE)。
