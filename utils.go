@@ -211,9 +211,10 @@ func parseQValue(v string) (float64, bool) {
 // escapes the next character inside a quoted string, so it is skipped too.
 func splitOutsideQuotes(s string, sep byte) []string {
 	var (
-		parts   []string
-		start   int
-		inQuote bool
+		parts      []string
+		start      int
+		quoteStart int
+		inQuote    bool
 	)
 
 	for i := 0; i < len(s); i++ {
@@ -221,6 +222,9 @@ func splitOutsideQuotes(s string, sep byte) []string {
 		case inQuote && s[i] == '\\' && i+1 < len(s):
 			i++ // the escaped character is never a delimiter
 		case s[i] == '"':
+			if !inQuote {
+				quoteStart = i
+			}
 			inQuote = !inQuote
 		case s[i] == sep && !inQuote:
 			parts = append(parts, s[start:i])
@@ -245,7 +249,19 @@ func splitOutsideQuotes(s string, sep byte) []string {
 		// application/json;profile="oops` lost the HTML range's q=0 to the
 		// comma inside its own perfectly valid quoted string, and the refused
 		// HTML was then what GetPreferredFormat returned.
-		return append(parts, strings.Split(s[start:], string(sep))...)
+		//
+		// Recovering from the last emitted separator is not far enough
+		// either, because a balanced quoted string can sit before the
+		// unmatched one INSIDE the same unemitted part:
+		// `text/html;profile="a,b";q=0;foo="oops, application/json;q=0` has
+		// emitted nothing yet, and re-reading from the start tore that range
+		// on the comma in profile. Nothing before the opening quote can
+		// contain a separator this loop did not already act on, so that is
+		// the earliest point anything is in doubt, and the earliest point
+		// worth re-reading.
+		recovered := strings.Split(s[quoteStart:], string(sep))
+		recovered[0] = s[start:quoteStart] + recovered[0]
+		return append(parts, recovered...)
 	}
 
 	return append(parts, s[start:])

@@ -1650,6 +1650,26 @@ func TestUnmatchedQuoteOnlyDiscardsItsOwnTail(t *testing.T) {
 		}
 	})
 
+	// The unmatched quote can also open AFTER a balanced one inside the same
+	// not-yet-emitted range. Recovering from the last emitted separator was
+	// still too early there: nothing had been emitted, so the whole range was
+	// re-read and the comma inside profile tore it in two.
+	t.Run("a balanced quote earlier in the same range survives", func(t *testing.T) {
+		ctx := newMockContext()
+		ctx.headers["Accept"] = `text/html;profile="a,b";q=0;foo="oops, application/json;q=0`
+
+		ranges := parseAccept(ctx.headers["Accept"])
+		if len(ranges) != 2 {
+			t.Fatalf("parsed %d ranges, want 2: %+v", len(ranges), ranges)
+		}
+		if ranges[0].quality != 0 {
+			t.Errorf("the HTML range's q=0 was lost: quality = %v, want 0", ranges[0].quality)
+		}
+		if got := GetPreferredFormat(ctx); got != "text" {
+			t.Errorf("GetPreferredFormat = %q, want text -- both representations were refused", got)
+		}
+	})
+
 	// The case the recovery was added for still works: when the quote opens
 	// before any separator, there is no valid prefix to keep and the whole
 	// string is re-read.
