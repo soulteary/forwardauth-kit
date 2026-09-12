@@ -2,7 +2,7 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/soulteary/forwardauth-kit/v2.svg)](https://pkg.go.dev/github.com/soulteary/forwardauth-kit/v2)
 [![Go Report Card](.github/goreportcard.svg)](.github/goreportcard-report.md)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![codecov](https://codecov.io/gh/soulteary/forwardauth-kit/graph/badge.svg)](https://codecov.io/gh/soulteary/forwardauth-kit)
 
 [中文文档](README_CN.md)
@@ -18,6 +18,11 @@ A Go library providing ForwardAuth middleware for reverse proxy authentication. 
 - **Flexible Header Mapping**: Customizable authentication response headers
 - **Framework Agnostic**: Core logic is framework-independent with Fiber adapter included
 - **Cross-domain Support**: Cookie utilities for cross-domain authentication flows
+
+## Requirements
+
+- **Go 1.27+** (`go.mod` declares `go 1.27.0`)
+- Fiber v3.4.0 or later for the `Fiber*` adapters; the core is framework-agnostic
 
 ## Installation
 
@@ -66,11 +71,36 @@ func main() {
 config := forwardauth.Config{
     PasswordEnabled: true,
     PasswordHeader:  "Stargate-Password",
-    ValidPasswords:  []string{"HASHED_PASSWORD_1", "HASHED_PASSWORD_2"},
+    // PLAINTEXT values, compared in constant time. These are not hashes.
+    // They must be stored already normalized (see below) or nothing matches.
+    ValidPasswords: []string{"ACCESSCODE1", "ACCESSCODE2"},
 }
 
 handler := forwardauth.NewHandler(&config)
 ```
+
+**The default normalizer upper-cases and strips spaces**, which makes the
+comparison case-insensitive and throws away entropy you may believe you have.
+It is shaped for invite and access codes (`"ABCD 1234"`), not for passwords.
+For real passwords, supply your own:
+
+```go
+config.PasswordNormalizer = strings.TrimSpace // or nil for no normalization
+```
+
+To verify against hashes instead of a plaintext list, use `PasswordCheckFunc`:
+
+```go
+config := forwardauth.Config{
+    PasswordEnabled: true,
+    PasswordCheckFunc: func(password string) bool {
+        return bcrypt.CompareHashAndPassword(stored, []byte(password)) == nil
+    },
+}
+```
+
+`Config.Validate()` rejects `PasswordEnabled` with neither `ValidPasswords` nor
+`PasswordCheckFunc` set.
 
 ### Header-based Authentication (Warden Integration)
 
@@ -128,6 +158,11 @@ handler := forwardauth.NewHandler(&config)
 
 ### Step-up Authentication
 
+Step-up matches `StepUpPaths` against the **original request target**, which a
+ForwardAuth proxy passes in `X-Forwarded-Uri` — not against the auth endpoint's
+own path. Matching falls back to `Context.Path()` when no forwarded URI is
+present, so direct (non-proxied) use works unchanged.
+
 ```go
 config := forwardauth.Config{
     SessionEnabled:   true,
@@ -160,12 +195,29 @@ config := forwardauth.Config{
     AuthRefreshEnabled:  true,
     AuthRefreshInterval: 5 * time.Minute,
     HeaderAuthGetInfoFunc: func(phone, mail string) *forwardauth.UserInfo {
-        // Refresh user info periodically
+        // Return nil to signal that the lookup failed or the account is gone.
         return getUserFromWarden(phone, mail)
     },
 }
 
 handler := forwardauth.NewHandler(&config)
+```
+
+A refresh **replaces** the cached scopes and role rather than merging into them,
+so revoking a user's scopes to none, or clearing their role, takes effect. When
+`HeaderAuthGetInfoFunc` returns `nil` the cached scopes and role are cleared and
+`AuthResult.AuthRefreshFailed` is set — check it and reject the request if a
+directory outage must not leave a deleted or suspended account with access:
+
+```go
+result, err := handler.Check(c, sess)
+if err != nil {
+    return err
+}
+if result.AuthRefreshFailed {
+    // The directory could not confirm this user. Fail closed.
+    return forwardauth.SendErrorResponse(c, http.StatusForbidden, "authorization unavailable")
+}
 ```
 
 ## Configuration
@@ -213,6 +265,62 @@ On successful authentication, the following headers are set:
 | `X-Auth-Scopes` | Comma-separated scopes | `read,write,admin` |
 | `X-Auth-Role` | User role | `admin` |
 | `X-Auth-AMR` | Authentication methods used | `otp,mfa` |
+
+Emitted header values are sanitised: CR and LF are stripped, and a scope or AMR
+value containing a comma is dropped rather than emitted — `X-Auth-Scopes` is
+comma-separated, so a scope like `read,admin` would otherwise mint an extra
+permission downstream. Parse the header back with `ParseScopesFromHeader`.
+
+## Auth Result
+
+```go
+type AuthResult struct {
+    Authenticated     bool
+    UserID            string
+    Phone             string
+    Email             string
+    Name              string
+    Role              string
+    Scopes            []string
+    AMR               []string
+    AuthMethod        AuthMethod
+    NeedsRefresh      bool
+    RefreshedAt       time.Time
+    AuthRefreshFailed bool // the directory lookup failed; fail closed
+}
+```
+
+Scope helpers:
+
+```go
+forwardauth.ScopesContain(result.Scopes, "admin")
+forwardauth.MergeScopesUnique(a, b)
+forwardauth.ParseScopesFromHeader("read,write,admin")
+```
+
+## Errors
+
+| Sentinel | Meaning |
+|----------|---------|
+| `ErrHeaderAuthTrustUnspecified` | `HeaderAuthEnabled` is set but neither `HeaderAuthTrustFunc` nor `HeaderAuthAllowUntrustedHeaders` was provided. Returned by `Config.Validate()` — the decision cannot be defaulted safely. |
+| `ErrInvalidConfig` | The configuration is not usable |
+| `ErrNotAuthenticated` | No checker authenticated the request |
+| `ErrInvalidPassword` | The password checker rejected the value |
+| `ErrForbidden` | Authenticated but not permitted |
+
+Call `Config.Validate()` at startup so a missing trust decision fails the
+process rather than silently trusting client-supplied identity headers.
+
+## Response Format Helpers
+
+```go
+forwardauth.IsJSONRequest(c)
+forwardauth.IsXMLRequest(c)
+forwardauth.IsHTMLRequest(c)
+forwardauth.GetPreferredFormat(c)          // "json" | "xml" | "html"
+forwardauth.SendErrorResponse(c, 403, msg) // message is escaped for the chosen format
+forwardauth.NormalizeHost("[::1]:8080")    // "[::1]"
+```
 
 ## Custom Checkers
 
@@ -320,6 +428,60 @@ header, if you need the peer address -- and note that `forwardauth.Context`
 does not expose it, so a peer-address check has to happen in your adapter
 before the handler runs.
 
+## Upgrade Notes (v2.2.0)
+
+**This release can fail your startup on purpose.** With `HeaderAuthEnabled`
+set, `Config.Validate()` now returns `ErrHeaderAuthTrustUnspecified` unless you
+provide either `HeaderAuthTrustFunc` or `HeaderAuthAllowUntrustedHeaders`.
+
+- **Identity headers now require an explicit trust decision.** `HeaderChecker`
+  authenticates on `X-User-Phone` / `X-User-Mail` whenever the value is in the
+  allow list, at a higher priority than the session checker — and anything that
+  can reach this endpoint can set those headers. Neither the README's old nginx
+  sample nor Traefik's `trustForwardHeader` strips custom headers a client sent.
+  The package cannot know your trusted proxies, so the decision is yours to
+  state: `ProxySecretTrustFunc("X-Proxy-Secret", secret)` checks something only
+  the proxy can produce, or `HeaderAuthAllowUntrustedHeaders: true` acknowledges
+  that any caller may supply them. **Update your nginx/Traefik config as well**
+  — the sample now clears the identity headers and injects the secret.
+- **Step-up authentication now actually fires.** Patterns were matched against
+  `Context.Path()`, which in a ForwardAuth deployment is the fixed auth endpoint
+  (`/_auth`), so `StepUpPaths` matched nothing and step-up was silently inert on
+  every protected path. Matching now uses the forwarded URI. **If you had
+  `StepUpEnabled` set, step-up will start challenging requests it previously let
+  through.** Set `StepUpForwardedURITrusted: true` only if your proxy
+  *overwrites* `X-Forwarded-Uri`; when it is false, any request carrying the
+  header is treated as protected.
+- **An authorization refresh can now lower privileges.** It merged rather than
+  replaced, so revoking scopes to none or clearing a role left the old values in
+  the session for its whole life. A failed lookup only logged, leaving a deleted
+  account its access for as long as the lookup kept failing. The refresh now
+  replaces, and a `nil` result clears the cached scopes and role and sets the new
+  `AuthResult.AuthRefreshFailed`.
+- **A scope containing a comma no longer mints extra permissions.**
+  `BuildHeaders` joined scopes and AMR with `,` while `ParseScopesFromHeader`
+  splits on it. Such values are dropped now, and CR/LF is stripped from every
+  emitted header value.
+- **Escaping fixes.** The step-up redirect interpolated the callback URL — which
+  contains `://` and its own query string — into a query parameter unescaped, and
+  `SendErrorResponse` interpolated the message into XML markup unescaped.
+- **`NormalizeHost` handles IPv6.** It used `strings.Index(host, ":")`, which
+  truncated `[::1]:8080` to `[`. It uses `net.SplitHostPort` now.
+- **`ValidPasswords` is documented as plaintext**, which it always was despite
+  the field comment and the README example calling the values hashes. The default
+  password normalizer upper-cases, making the comparison case-insensitive; supply
+  `PasswordNormalizer` for real passwords.
+
+## Testing
+
+```bash
+go test ./...
+
+# With coverage
+go test ./... -coverprofile=coverage.out -covermode=atomic
+go tool cover -func=coverage.out
+```
+
 ## License
 
-MIT License
+Apache License 2.0 — see [LICENSE](LICENSE) for details.
