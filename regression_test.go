@@ -850,3 +850,73 @@ func TestXMLPredicateUsesTheSamePrecedence(t *testing.T) {
 		})
 	}
 }
+
+// --- Codex review round 12 (PR #4) ---
+
+// TestTypeWildcardsCountForThePredicates is the regression test for the
+// predicates rejecting "application/*" while the negotiator accepted it.
+//
+// "Accept: application/*" makes GetPreferredFormat settle on JSON, but
+// IsJSONRequest answered false, so a caller branching on the predicate and
+// then calling SendErrorResponse got one answer from each. A type wildcard
+// NAMES the type -- it narrows to that type's subtypes -- so it counts;
+// "*/*" names nothing and still does not.
+func TestTypeWildcardsCountForThePredicates(t *testing.T) {
+	for _, tc := range []struct {
+		accept   string
+		format   string
+		wantJSON bool
+		wantXML  bool
+	}{
+		// The reported case.
+		{"application/*", "json", true, true},
+
+		// Weights still apply through the wildcard.
+		{"application/*;q=0", "text", false, false},
+		{"application/*;q=0, text/html", "html", false, false},
+
+		// An exact range still outranks the type wildcard that covers it.
+		{"application/*;q=1, application/json;q=0", "xml", false, true},
+
+		// "*/*" names nothing: unchanged.
+		{"*/*", "html", false, false},
+		{"text/*", "html", false, false},
+	} {
+		t.Run(tc.accept, func(t *testing.T) {
+			ctx := newMockContext()
+			ctx.headers["Accept"] = tc.accept
+
+			if got := GetPreferredFormat(ctx); got != tc.format {
+				t.Errorf("GetPreferredFormat(%q) = %q, want %q", tc.accept, got, tc.format)
+			}
+			if got := IsJSONRequest(ctx); got != tc.wantJSON {
+				t.Errorf("IsJSONRequest(%q) = %v, want %v", tc.accept, got, tc.wantJSON)
+			}
+			if got := IsXMLRequest(ctx); got != tc.wantXML {
+				t.Errorf("IsXMLRequest(%q) = %v, want %v", tc.accept, got, tc.wantXML)
+			}
+		})
+	}
+}
+
+// TestGenericWildcardBoundaryIsDeliberate pins the one place the predicate and
+// the negotiator still differ, so it stays a known property rather than
+// becoming a surprise.
+//
+// With "*/*;q=1, text/html;q=0" the negotiator settles on JSON -- HTML is
+// refused, and "*/*" covers JSON at q=1 -- while IsJSONRequest stays false
+// because "*/*" names no type at all. Closing this would mean reporting that
+// every `curl` default (`Accept: */*`) is a JSON request, which is a much
+// wider behaviour change than the disagreement is worth.
+func TestGenericWildcardBoundaryIsDeliberate(t *testing.T) {
+	ctx := newMockContext()
+	ctx.headers["Accept"] = "*/*;q=1, text/html;q=0"
+
+	if got := GetPreferredFormat(ctx); got != "json" {
+		t.Fatalf("GetPreferredFormat = %q, want json; the premise has changed", got)
+	}
+	if IsJSONRequest(ctx) {
+		t.Error("IsJSONRequest now reports \"*/*\" as naming JSON -- confirm that is intended, " +
+			"because it makes every Accept: */* a JSON request")
+	}
+}

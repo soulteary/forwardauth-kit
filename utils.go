@@ -174,9 +174,15 @@ func splitOutsideQuotes(s string, sep byte) []string {
 // which outranks "*/*"; within a shape, a range matching more media-type
 // parameters is the more specific one. Equal on both, the earlier range wins.
 //
-// namesOnly drops the wildcards, which is the narrower question the exported
-// predicates ask -- "did the client NAME this type?" rather than "would this
-// type be acceptable?".
+// namesOnly drops the fully generic "*/*" and nothing else, which is the
+// narrower question the exported predicates ask: "did the client NAME this
+// type?" rather than "would this type be acceptable?". "application/*" DOES
+// name the type -- it narrows to application subtypes -- so it counts, while
+// "*/*" names nothing and does not.
+//
+// The distinction has to match the negotiator's or the two disagree: with
+// "Accept: application/*" the negotiator settles on JSON, and a predicate that
+// rejected type wildcards told the caller the client had not asked for it.
 func bestRange(ranges []acceptRange, mediaType string, namesOnly bool) (acceptRange, bool) {
 	typ, sub, _ := strings.Cut(mediaType, "/")
 
@@ -188,7 +194,7 @@ func bestRange(ranges []acceptRange, mediaType string, namesOnly bool) (acceptRa
 		switch {
 		case r.typ == typ && r.sub == sub:
 			shape = 3
-		case !namesOnly && r.typ == typ && r.sub == "*":
+		case r.typ == typ && r.sub == "*":
 			shape = 2
 		case !namesOnly && r.typ == "*" && r.sub == "*":
 			shape = 1
