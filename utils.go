@@ -54,8 +54,8 @@ type acceptRange struct {
 func parseAccept(header string) []acceptRange {
 	var ranges []acceptRange
 
-	for i, part := range strings.Split(header, ",") {
-		fields := strings.Split(part, ";")
+	for i, part := range splitOutsideQuotes(header, ',') {
+		fields := splitOutsideQuotes(part, ';')
 		typ, sub, ok := strings.Cut(strings.ToLower(strings.TrimSpace(fields[0])), "/")
 		if !ok || typ == "" || sub == "" {
 			continue
@@ -79,6 +79,40 @@ func parseAccept(header string) []acceptRange {
 	}
 
 	return ranges
+}
+
+// splitOutsideQuotes splits on sep, ignoring separators inside a quoted
+// string.
+//
+// A media-type parameter value may be a quoted-string (RFC 9110 5.6.6), and it
+// may contain the very characters that delimit the list:
+//
+//	Accept: text/html;profile="a,b";q=0, application/json;q=1
+//
+// Splitting that on a raw comma tears the HTML range in two, so its q=0 is
+// lost and HTML is recorded at the default weight of 1 -- the tie-break then
+// picks HTML and redirects a client that explicitly refused it. A backslash
+// escapes the next character inside a quoted string, so it is skipped too.
+func splitOutsideQuotes(s string, sep byte) []string {
+	var (
+		parts   []string
+		start   int
+		inQuote bool
+	)
+
+	for i := 0; i < len(s); i++ {
+		switch {
+		case inQuote && s[i] == '\\' && i+1 < len(s):
+			i++ // the escaped character is never a delimiter
+		case s[i] == '"':
+			inQuote = !inQuote
+		case s[i] == sep && !inQuote:
+			parts = append(parts, s[start:i])
+			start = i + 1
+		}
+	}
+
+	return append(parts, s[start:])
 }
 
 // matchAccept returns the weight the header gives mediaType, and the position

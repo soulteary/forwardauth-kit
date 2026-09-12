@@ -585,3 +585,52 @@ func TestExplicitRefusalIsNotARequest(t *testing.T) {
 		})
 	}
 }
+
+// --- Codex review round 7 (PR #4) ---
+
+// TestAcceptParsingRespectsQuotedParameters is the regression test for
+// splitting the Accept header on raw delimiters.
+//
+// A media-type parameter value may be a quoted-string (RFC 9110 5.6.6) and may
+// contain the very characters that delimit the list. Splitting
+// `text/html;profile="a,b";q=0, application/json;q=1` on a raw comma tore the
+// HTML range in two, so its q=0 was lost, HTML was recorded at the default
+// weight of 1, and the tie-break picked HTML -- redirecting a client that had
+// explicitly refused it. Exactly the inversion the q parsing was added to stop,
+// reached through the splitter instead.
+func TestAcceptParsingRespectsQuotedParameters(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		accept string
+		want   string
+	}{
+		// The reported case.
+		{"comma inside a quoted parameter", `text/html;profile="a,b";q=0, application/json;q=1`, "json"},
+
+		// A semicolon inside the quotes must not start a new parameter
+		// either, or the q that follows it is read as part of the value.
+		{"semicolon inside a quoted parameter", `text/html;profile="a;b";q=0, application/json;q=1`, "json"},
+
+		// An escaped quote must not end the quoted string early.
+		{"escaped quote", `text/html;profile="a\",b";q=0, application/json;q=1`, "json"},
+
+		// The quoted parameter must not stop a range from being honoured.
+		{"quoted parameter, html wanted", `text/html;profile="a,b";q=1, application/json;q=0`, "html"},
+		{"quoted parameter, no weights", `text/html;profile="a,b"`, "html"},
+
+		// An unbalanced quote must not swallow the rest of the header.
+		{"unbalanced quote", `text/html;profile="a, application/json`, "html"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := newMockContext()
+			ctx.headers["Accept"] = tc.accept
+
+			if got := GetPreferredFormat(ctx); got != tc.want {
+				t.Errorf("GetPreferredFormat(%q) = %q, want %q", tc.accept, got, tc.want)
+			}
+			if got, format := IsHTMLRequest(ctx), GetPreferredFormat(ctx); got != (format == "html") {
+				t.Errorf("IsHTMLRequest = %v but GetPreferredFormat = %q", got, format)
+			}
+		})
+	}
+}
