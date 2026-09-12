@@ -1370,3 +1370,96 @@ func TestFailedRefreshSavesOnceThroughASerializingBackend(t *testing.T) {
 		t.Errorf("saves = %d when boxed scopes were still present, want 1", sess.saves)
 	}
 }
+
+// --- Codex review round 17 (PR #4) ---
+
+// TestRefusalsSurviveTheFallbackPass is the regression test for the fallback
+// overriding an explicit q=0.
+//
+// The fallback exists because a header naming only representations this
+// package cannot produce is better disregarded than answered with 406 (RFC
+// 9110 12.5.1). That is a concession for a question the client left
+// UNANSWERED, and "q=0" is an answer: with "application/json;profile=foo;q=1,
+// application/json;q=0" the honourable pass found nothing acceptable, the
+// fallback took the profile range, and SendErrorResponse emitted bare
+// application/json -- the one representation the client had refused.
+//
+// The same two ranges in the other order already answered "text", because at
+// equal shape and equal satisfied-parameter count bestRange keeps whichever it
+// saw first. So this also removes an order dependency: both spellings of the
+// same header now answer the same thing.
+func TestRefusalsSurviveTheFallbackPass(t *testing.T) {
+	for _, tc := range []struct {
+		accept   string
+		format   string
+		wantJSON bool
+		wantXML  bool
+	}{
+		// The reported case, and the same header reordered.
+		{"application/json;profile=foo;q=1, application/json;q=0", "text", false, false},
+		{"application/json;q=0, application/json;profile=foo;q=1", "text", false, false},
+
+		// The same shape for the other two formats.
+		{"application/xml;profile=foo;q=1, application/xml;q=0", "text", false, false},
+		{"text/html;profile=foo;q=1, text/html;q=0", "text", false, false},
+
+		// A refusal reached through a wildcard is still a refusal: these
+		// refuse every representation that would actually be sent.
+		{"application/json;profile=foo;q=1, application/*;q=0", "text", false, false},
+		{"application/json;profile=foo;q=1, */*;q=0", "text", false, false},
+
+		// A refused format does not suppress an acceptable one. The honourable
+		// pass answers here, so the fallback never runs.
+		{"application/json;profile=foo;q=1, application/json;q=0, text/html;q=0.5", "html", false, false},
+
+		// Controls. Nothing honourable at all is still an unanswered question,
+		// so the fallback still applies...
+		{"application/json;profile=foo", "json", true, false},
+		// ...and a parameter this package satisfies still outranks an earlier
+		// refusal, which is the round-9 behaviour.
+		{"application/json;q=0, application/json;charset=utf-8;q=1", "json", true, false},
+		// ...and an honourable range for ANOTHER type refuses nothing here.
+		{"application/xml;q=0.5, application/json;profile=foo;q=1", "xml", true, true},
+	} {
+		t.Run(tc.accept, func(t *testing.T) {
+			ctx := newMockContext()
+			ctx.headers["Accept"] = tc.accept
+
+			if got := GetPreferredFormat(ctx); got != tc.format {
+				t.Errorf("GetPreferredFormat(%q) = %q, want %q", tc.accept, got, tc.format)
+			}
+			if got := IsJSONRequest(ctx); got != tc.wantJSON {
+				t.Errorf("IsJSONRequest(%q) = %v, want %v", tc.accept, got, tc.wantJSON)
+			}
+			if got := IsXMLRequest(ctx); got != tc.wantXML {
+				t.Errorf("IsXMLRequest(%q) = %v, want %v", tc.accept, got, tc.wantXML)
+			}
+		})
+	}
+}
+
+// TestRefusalIsIndependentOfHeaderOrder pins the property behind the case
+// above, rather than the two spellings that happened to be reported: a header
+// and its reverse describe the same preferences, so they have to negotiate to
+// the same representation.
+func TestRefusalIsIndependentOfHeaderOrder(t *testing.T) {
+	for _, pair := range [][2]string{
+		{"application/json;profile=foo;q=1, application/json;q=0",
+			"application/json;q=0, application/json;profile=foo;q=1"},
+		{"application/xml;profile=foo;q=1, application/xml;q=0",
+			"application/xml;q=0, application/xml;profile=foo;q=1"},
+		{"application/json;profile=foo;q=1, application/*;q=0",
+			"application/*;q=0, application/json;profile=foo;q=1"},
+	} {
+		forward, reversed := newMockContext(), newMockContext()
+		forward.headers["Accept"] = pair[0]
+		reversed.headers["Accept"] = pair[1]
+
+		if a, b := GetPreferredFormat(forward), GetPreferredFormat(reversed); a != b {
+			t.Errorf("GetPreferredFormat is order-dependent:\n  %q -> %q\n  %q -> %q", pair[0], a, pair[1], b)
+		}
+		if a, b := IsJSONRequest(forward), IsJSONRequest(reversed); a != b {
+			t.Errorf("IsJSONRequest is order-dependent:\n  %q -> %v\n  %q -> %v", pair[0], a, pair[1], b)
+		}
+	}
+}

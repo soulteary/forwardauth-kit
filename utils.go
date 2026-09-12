@@ -241,8 +241,12 @@ func namesMediaType(header, mediaType string) bool {
 	// range it cannot honour and sends JSON off "application/*", while this
 	// let the refusal it discarded win on shape and answered false.
 	named := false
-	honourableFirst(parseAccept(header), func(ranges []acceptRange) bool {
-		best, ok := bestRange(ranges, mediaType, true)
+	honourableFirst(parseAccept(header), func(candidates, refusals []acceptRange) bool {
+		if refusedByRange(refusals, mediaType) {
+			named = false
+			return false
+		}
+		best, ok := bestRange(candidates, mediaType, true)
 		named = ok && best.quality > 0
 		return named
 	})
@@ -264,17 +268,37 @@ func honourableRanges(ranges []acceptRange) []acceptRange {
 }
 
 // honourableFirst calls answered with the honourable ranges and, when that
-// pass answers nothing, calls it again with the whole set.
+// pass answers nothing, calls it again with the whole set -- handing it the
+// honourable ranges as refusals the second time.
 //
 // The negotiator and the exported predicates both have to walk the header this
 // way, in this order, and agree on when a pass has answered nothing -- a range
 // matched at q=0 has not. Every time the two have been written out separately
 // they have drifted, so they share the walk instead.
-func honourableFirst(ranges []acceptRange, answered func([]acceptRange) bool) {
-	if answered(honourableRanges(ranges)) {
+func honourableFirst(ranges []acceptRange, answered func(candidates, refusals []acceptRange) bool) {
+	honourable := honourableRanges(ranges)
+	if answered(honourable, nil) {
 		return
 	}
-	answered(ranges)
+	answered(ranges, honourable)
+}
+
+// refusedByRange reports whether any of the given ranges matches mediaType and
+// gives it zero weight.
+//
+// A refusal from a range this package can honour survives the fallback pass.
+// The fallback exists because a header naming only representations that cannot
+// be produced is better disregarded than answered with 406 (RFC 9110 12.5.1),
+// but that is a concession for a question the client left UNANSWERED, and
+// "q=0" is an answer. Without it, "application/json;profile=foo;q=1,
+// application/json;q=0" fell through to the profile range and sent bare
+// application/json -- the one representation the client had explicitly
+// refused -- while the same two ranges in the other order correctly sent text,
+// because at equal shape and equal satisfied-parameter count bestRange keeps
+// whichever it saw first.
+func refusedByRange(ranges []acceptRange, mediaType string) bool {
+	best, ok := bestRange(ranges, mediaType, false)
+	return ok && best.quality <= 0
 }
 
 // negotiatedFormats are the formats SendErrorResponse can produce, in the
@@ -295,9 +319,15 @@ var negotiatedFormats = []struct {
 
 // selectFormat picks the best-weighted format among the given ranges, or ""
 // when none of them is acceptable.
-func selectFormat(ranges []acceptRange) string {
+//
+// A format refused by one of the refusals ranges is not a candidate at all,
+// whatever the ranges say about it. See refusedByRange.
+func selectFormat(ranges, refusals []acceptRange) string {
 	bestFormat, bestQuality, bestOrder := "", 0.0, 0
 	for _, candidate := range negotiatedFormats {
+		if refusedByRange(refusals, candidate.mediaType) {
+			continue
+		}
 		quality, order, matched := matchAccept(ranges, candidate.mediaType)
 		if !matched || quality <= 0 {
 			continue
@@ -328,8 +358,8 @@ func GetPreferredFormat(c Context) string {
 	// "text/html;profile=..." is still far better served the login redirect
 	// than a plain-text 401 it did not ask for either.
 	format := ""
-	honourableFirst(parseAccept(acceptHeader), func(ranges []acceptRange) bool {
-		format = selectFormat(ranges)
+	honourableFirst(parseAccept(acceptHeader), func(candidates, refusals []acceptRange) bool {
+		format = selectFormat(candidates, refusals)
 		return format != ""
 	})
 	if format == "" {
