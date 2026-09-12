@@ -115,12 +115,40 @@ func parseAccept(header string) []acceptRange {
 }
 
 // unquoteParam removes the surrounding quotes of a quoted-string parameter
-// value, leaving an unquoted token untouched.
+// value and decodes its quoted-pairs, leaving an unquoted token untouched.
+//
+// Inside a quoted-string a backslash escapes whatever octet follows it (RFC
+// 9110 5.6.4); it is not a prefix that only means something before a quote.
+// Unescaping just \" left charset="utf\-8" reading as the literal utf\-8,
+// which is not a charset this package produces, so a range naming one it CAN
+// honour was recorded as unhonourable and dropped --
+// "application/json;charset=\"utf\\-8\";q=1, application/xml;q=0.5" answered
+// XML.
+//
+// splitOutsideQuotes already skips the escaped octet when deciding where a
+// value ends, so this was the parser knowing one half of a rule and not the
+// other.
 func unquoteParam(v string) string {
-	if len(v) >= 2 && v[0] == '"' && v[len(v)-1] == '"' {
-		return strings.ReplaceAll(v[1:len(v)-1], `\"`, `"`)
+	if len(v) < 2 || v[0] != '"' || v[len(v)-1] != '"' {
+		return v
 	}
-	return v
+
+	inner := v[1 : len(v)-1]
+	if !strings.ContainsRune(inner, '\\') {
+		return inner
+	}
+
+	var unescaped strings.Builder
+	unescaped.Grow(len(inner))
+	for i := 0; i < len(inner); i++ {
+		// A trailing backslash has nothing to escape, which only a malformed
+		// value reaches; it stands for itself rather than being dropped.
+		if inner[i] == '\\' && i+1 < len(inner) {
+			i++
+		}
+		unescaped.WriteByte(inner[i])
+	}
+	return unescaped.String()
 }
 
 // splitOutsideQuotes splits on sep, ignoring separators inside a quoted

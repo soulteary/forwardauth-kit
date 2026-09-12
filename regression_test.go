@@ -1573,3 +1573,49 @@ func TestTrustFuncDoesNotEstablishHeaderProvenance(t *testing.T) {
 		t.Error("a request whose identity header the proxy cleared still authenticated")
 	}
 }
+
+// --- Codex review round 21 (PR #4) ---
+
+// TestQuotedPairsDecodeInParameterValues is the regression test for treating
+// a backslash as an escape only before a quote.
+//
+// Inside a quoted-string a backslash escapes whatever octet follows it (RFC
+// 9110 5.6.4). Unescaping just \" left charset="utf\-8" reading as the literal
+// utf\-8, so a range naming a charset this package CAN honour was recorded as
+// unhonourable and dropped from the honourable pass.
+//
+// splitOutsideQuotes already skipped the escaped octet when deciding where a
+// value ends. The two halves of the rule now agree.
+func TestQuotedPairsDecodeInParameterValues(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{`"utf\-8"`, "utf-8"}, // the reported case: escaping an ordinary character
+		{`"utf\"8"`, `utf"8`}, // an escaped quote, which already worked
+		{`"a\\b"`, `a\b`},     // an escaped backslash, which did not
+		{`"utf-8"`, "utf-8"},  // nothing to unescape
+		{`utf-8`, "utf-8"},    // an unquoted token is untouched
+		{`"a\"`, `a\`},        // malformed: a trailing backslash stands for itself
+		{`""`, ""},            // empty quoted-string
+		{`"\\"`, `\`},         // just an escaped backslash
+	} {
+		if got := unquoteParam(tc.in); got != tc.want {
+			t.Errorf("unquoteParam(%s) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+
+	// And what it means for negotiation: all three spellings of the same
+	// charset are the same honourable range, so none of them loses to XML.
+	for _, accept := range []string{
+		`application/json;charset="utf\-8";q=1, application/xml;q=0.5`,
+		`application/json;charset="utf-8";q=1, application/xml;q=0.5`,
+		`application/json;charset=utf-8;q=1, application/xml;q=0.5`,
+	} {
+		ctx := newMockContext()
+		ctx.headers["Accept"] = accept
+		if got := GetPreferredFormat(ctx); got != "json" {
+			t.Errorf("GetPreferredFormat(%q) = %q, want json -- the charset is one this package produces", accept, got)
+		}
+		if !IsJSONRequest(ctx) {
+			t.Errorf("IsJSONRequest(%q) = false, want true", accept)
+		}
+	}
+}
