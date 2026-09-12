@@ -499,3 +499,89 @@ func TestHTMLDetectionAgreesWithPreferredFormat(t *testing.T) {
 		})
 	}
 }
+
+// --- Codex review round 6 (PR #4) ---
+
+// TestPreferredFormatHonoursQualityWeights is the regression test for the
+// Accept header's q parameter being discarded.
+//
+// RFC 9110 12.4.2 defines q=0 as "not acceptable", so
+// "Accept: application/json;q=0, text/html;q=1" asks for HTML and explicitly
+// refuses JSON. Selecting the first RECOGNIZED media type answered "json" for
+// it, and HandleNotAuthenticated then sent JSON -- the one format the client
+// had ruled out -- instead of the login redirect.
+func TestPreferredFormatHonoursQualityWeights(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		accept string
+		want   string
+	}{
+		// The reported case.
+		{"json refused, html wanted", "application/json;q=0, text/html;q=1", "html"},
+		{"json refused, wildcard", "application/json;q=0, */*", "html"},
+
+		// A weight that merely ranks, rather than refuses.
+		{"json outranks html", "text/html;q=0.8, application/json;q=0.9", "json"},
+		{"html outranks json", "application/json;q=0.3, text/html;q=0.7", "html"},
+		{"exact beats wildcard", "application/json;q=0.9, */*;q=0.8", "json"},
+
+		// The weight can sit behind another parameter.
+		{"q after another parameter", "text/html;level=1;q=0, application/json", "json"},
+
+		// Nothing acceptable at all.
+		{"everything refused", "*/*;q=0", "text"},
+		{"only refusals", "text/html;q=0, application/json;q=0, application/xml;q=0", "text"},
+
+		// A malformed weight is ignored, not read as a refusal.
+		{"malformed weight", "application/json;q=bogus", "json"},
+
+		// Equal weights still resolve exactly as they did before.
+		{"first named wins", "application/json, text/html", "json"},
+		{"first named wins, reversed", "text/html, application/json", "html"},
+		{"bare wildcard is html", "*/*", "html"},
+		{"xml before json", "application/xml, application/json", "xml"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := newMockContext()
+			ctx.headers["Accept"] = tc.accept
+
+			if got := GetPreferredFormat(ctx); got != tc.want {
+				t.Errorf("GetPreferredFormat(%q) = %q, want %q", tc.accept, got, tc.want)
+			}
+			// The invariant from round 5 must survive the rewrite.
+			if got, format := IsHTMLRequest(ctx), GetPreferredFormat(ctx); got != (format == "html") {
+				t.Errorf("IsHTMLRequest = %v but GetPreferredFormat = %q", got, format)
+			}
+		})
+	}
+}
+
+// TestExplicitRefusalIsNotARequest: a q=0 names a type in order to REFUSE it,
+// so reporting it as a request for that type inverts the client's meaning.
+func TestExplicitRefusalIsNotARequest(t *testing.T) {
+	for _, tc := range []struct {
+		accept    string
+		wantJSON  bool
+		wantXMLed bool
+	}{
+		{"application/json", true, false},
+		{"application/json;q=0", false, false},
+		{"application/json;q=0.1", true, false},
+		{"application/xml;q=0", false, false},
+		{"application/xml", false, true},
+		{"text/html, application/json", true, false},
+		{"*/*", false, false}, // a wildcard still does not NAME either type
+	} {
+		t.Run(tc.accept, func(t *testing.T) {
+			ctx := newMockContext()
+			ctx.headers["Accept"] = tc.accept
+
+			if got := IsJSONRequest(ctx); got != tc.wantJSON {
+				t.Errorf("IsJSONRequest(%q) = %v, want %v", tc.accept, got, tc.wantJSON)
+			}
+			if got := IsXMLRequest(ctx); got != tc.wantXMLed {
+				t.Errorf("IsXMLRequest(%q) = %v, want %v", tc.accept, got, tc.wantXMLed)
+			}
+		})
+	}
+}

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/xml"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 )
 
@@ -27,22 +29,125 @@ func IsHTMLRequest(c Context) bool {
 
 // IsJSONRequest checks if the request accepts JSON responses.
 func IsJSONRequest(c Context) bool {
-	acceptHeader := c.Get("Accept")
-	if acceptHeader == "" {
-		return false
-	}
-
-	return strings.Contains(acceptHeader, "application/json")
+	return namesMediaType(c.Get("Accept"), "application/json")
 }
 
 // IsXMLRequest checks if the request accepts XML responses.
 func IsXMLRequest(c Context) bool {
-	acceptHeader := c.Get("Accept")
-	if acceptHeader == "" {
+	return namesMediaType(c.Get("Accept"), "application/xml")
+}
+
+// acceptRange is one parsed media range of an Accept header.
+type acceptRange struct {
+	typ     string  // lowercased primary type, "*" for a wildcard
+	sub     string  // lowercased subtype, "*" for a wildcard
+	quality float64 // the q parameter; 1 when absent
+	order   int     // position in the header, for tie-breaking
+}
+
+// parseAccept parses an Accept header into weighted media ranges.
+//
+// The weights are the point. RFC 9110 12.4.2 defines q=0 as "not acceptable",
+// so "application/json;q=0, text/html;q=1" asks for HTML and explicitly
+// REFUSES JSON -- and the weight can sit behind other parameters, as in
+// "text/html;level=1;q=0.5", so every parameter has to be scanned.
+func parseAccept(header string) []acceptRange {
+	var ranges []acceptRange
+
+	for i, part := range strings.Split(header, ",") {
+		fields := strings.Split(part, ";")
+		typ, sub, ok := strings.Cut(strings.ToLower(strings.TrimSpace(fields[0])), "/")
+		if !ok || typ == "" || sub == "" {
+			continue
+		}
+
+		quality := 1.0
+		for _, param := range fields[1:] {
+			name, value, ok := strings.Cut(param, "=")
+			if !ok || !strings.EqualFold(strings.TrimSpace(name), "q") {
+				continue
+			}
+			// A malformed weight is not a refusal: RFC 9110 says to ignore
+			// the parameter, so the default weight stands.
+			if q, err := strconv.ParseFloat(strings.TrimSpace(value), 64); err == nil && q >= 0 {
+				quality = math.Min(q, 1)
+			}
+			break
+		}
+
+		ranges = append(ranges, acceptRange{typ: typ, sub: sub, quality: quality, order: i})
+	}
+
+	return ranges
+}
+
+// matchAccept returns the weight the header gives mediaType, and the position
+// of the range that decided it.
+//
+// Precedence is RFC 9110 12.5.1: an exact type/subtype outranks "type/*",
+// which outranks "*/*", regardless of the weights -- the most specific range
+// is the one that speaks for this type.
+func matchAccept(ranges []acceptRange, mediaType string) (quality float64, order int, matched bool) {
+	typ, sub, _ := strings.Cut(mediaType, "/")
+
+	best := 0
+	for _, r := range ranges {
+		var specificity int
+		switch {
+		case r.typ == typ && r.sub == sub:
+			specificity = 3
+		case r.typ == typ && r.sub == "*":
+			specificity = 2
+		case r.typ == "*" && r.sub == "*":
+			specificity = 1
+		default:
+			continue
+		}
+		if specificity > best {
+			best, quality, order, matched = specificity, r.quality, r.order, true
+		}
+	}
+
+	return quality, order, matched
+}
+
+// namesMediaType reports whether the header names mediaType exactly, with a
+// non-zero weight.
+//
+// Deliberately narrower than matchAccept: this keeps answering the question
+// IsJSONRequest and IsXMLRequest have always answered -- "did the client ask
+// for this type?" -- so "*/*" still does not count as asking for JSON. What
+// changes is that an explicit q=0, which is a refusal, no longer reads as a
+// request for the type it refuses.
+func namesMediaType(header, mediaType string) bool {
+	if header == "" {
 		return false
 	}
 
-	return strings.Contains(acceptHeader, "application/xml")
+	typ, sub, _ := strings.Cut(mediaType, "/")
+	for _, r := range parseAccept(header) {
+		if r.typ == typ && r.sub == sub {
+			return r.quality > 0
+		}
+	}
+
+	return false
+}
+
+// negotiatedFormats are the formats SendErrorResponse can produce, in the
+// order that breaks a tie between equally weighted ranges.
+//
+// HTML leads so that a single "*/*" -- which matches all three equally, from
+// the same position -- still resolves to HTML, as it always has. A format
+// named EARLIER in the header still wins on a tie, so "application/json,
+// text/html" is JSON.
+var negotiatedFormats = []struct {
+	format    string
+	mediaType string
+}{
+	{"html", "text/html"},
+	{"json", "application/json"},
+	{"xml", "application/xml"},
 }
 
 // GetPreferredFormat returns the preferred response format based on Accept header.
@@ -52,19 +157,25 @@ func GetPreferredFormat(c Context) string {
 		return "html"
 	}
 
-	acceptParts := strings.Split(acceptHeader, ",")
-	for _, acceptPart := range acceptParts {
-		format := strings.Trim(strings.SplitN(acceptPart, ";", 2)[0], " ")
-		switch {
-		case strings.HasPrefix(format, "application/json"):
-			return "json"
-		case strings.HasPrefix(format, "application/xml"):
-			return "xml"
-		case format == "text/html" || format == "*/*":
-			return "html"
+	ranges := parseAccept(acceptHeader)
+
+	bestFormat, bestQuality, bestOrder := "", 0.0, 0
+	for _, candidate := range negotiatedFormats {
+		quality, order, matched := matchAccept(ranges, candidate.mediaType)
+		if !matched || quality <= 0 {
+			continue
 		}
+		if bestFormat != "" && !(quality > bestQuality || (quality == bestQuality && order < bestOrder)) {
+			continue
+		}
+		bestFormat, bestQuality, bestOrder = candidate.format, quality, order
 	}
-	return "text"
+
+	if bestFormat == "" {
+		return "text"
+	}
+
+	return bestFormat
 }
 
 // SendErrorResponse sends an error response in the format preferred by the client.
