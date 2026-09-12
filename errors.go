@@ -8,8 +8,14 @@ var (
 	ErrNoPasswordConfigured = errors.New("password authentication enabled but no passwords configured")
 	// ErrHeaderAuthTrustUnspecified indicates header-based authentication is
 	// enabled without stating whether the identity headers can be trusted.
-	// Set HeaderAuthTrustFunc to validate the peer, or
+	// Set HeaderAuthTrustFunc to say which requests may supply them, or
 	// HeaderAuthAllowUntrustedHeaders to accept them from any caller.
+	//
+	// Neither replaces the proxy stripping the client's identity headers and
+	// setting its own. What a trust check does and does not establish is
+	// documented on HeaderAuthTrustFunc and stated only there -- paraphrasing
+	// it here is what left this comment recommending a peer check, which is
+	// the one check the rule exists to rule out.
 	ErrHeaderAuthTrustUnspecified = errors.New("header auth requires HeaderAuthTrustFunc or HeaderAuthAllowUntrustedHeaders")
 
 	ErrNoUserCheckFunc = errors.New("header authentication enabled but no user check function provided")
