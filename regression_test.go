@@ -453,3 +453,49 @@ func TestProxySecretTrustFuncFailsClosed(t *testing.T) {
 		t.Error("the correct secret was not trusted")
 	}
 }
+
+// --- Codex review round 5 (PR #4) ---
+
+// TestHTMLDetectionAgreesWithPreferredFormat is the regression test for
+// IsHTMLRequest honouring "*/*" only in first position while
+// GetPreferredFormat honoured it anywhere.
+//
+// "Accept: application/x-custom, */*" made the two disagree:
+// HandleNotAuthenticated skipped the login redirect because IsHTMLRequest said
+// false, and SendErrorResponse then saw "html" -- for which it has no branch --
+// and fell through to a plain-text 401.
+func TestHTMLDetectionAgreesWithPreferredFormat(t *testing.T) {
+	for _, tc := range []struct {
+		accept string
+		want   bool
+	}{
+		{"", true},
+		{"text/html", true},
+		{"*/*", true},
+		{"text/html,application/xhtml+xml,*/*;q=0.8", true},
+
+		// The reported case: an unsupported preference followed by a wildcard.
+		{"application/x-custom, */*", true},
+
+		// An earlier SUPPORTED non-HTML format still settles it.
+		{"application/json, */*", false},
+		{"application/xml, */*", false},
+		{"application/json", false},
+		{"text/plain", false},
+	} {
+		t.Run(tc.accept, func(t *testing.T) {
+			ctx := newMockContext()
+			if tc.accept != "" {
+				ctx.headers["Accept"] = tc.accept
+			}
+
+			if got := IsHTMLRequest(ctx); got != tc.want {
+				t.Errorf("IsHTMLRequest(%q) = %v, want %v", tc.accept, got, tc.want)
+			}
+			// The invariant: the two must never disagree.
+			if got, format := IsHTMLRequest(ctx), GetPreferredFormat(ctx); got != (format == "html") {
+				t.Errorf("IsHTMLRequest = %v but GetPreferredFormat = %q", got, format)
+			}
+		})
+	}
+}

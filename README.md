@@ -280,6 +280,12 @@ location / {
 
 location = /_auth {
     internal;
+
+    # Define the secret. Template it in at deploy time (envsubst, Ansible,
+    # a Helm value) -- $proxy_secret is not a built-in nginx variable, and
+    # nginx refuses to start if it is only referenced.
+    set $proxy_secret "REPLACE_WITH_A_LONG_RANDOM_STRING";
+
     proxy_pass http://auth-service:3000/_auth;
     proxy_pass_request_body off;
     proxy_set_header Content-Length "";

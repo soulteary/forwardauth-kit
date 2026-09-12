@@ -7,31 +7,22 @@ import (
 	"strings"
 )
 
-// IsHTMLRequest checks if the request accepts HTML responses.
-// It examines the Accept header to determine if the client expects HTML content.
+// IsHTMLRequest reports whether an HTML response is what this client wants.
 //
-// Returns true if:
-//   - Accept header is empty (defaults to HTML)
-//   - Accept header contains "text/html"
-//   - Accept header starts with "*/*" (accepts all types)
+// It is defined as agreement with GetPreferredFormat, and deliberately so:
+// the two decide the same question for the same request, and disagreeing
+// stranded the caller. "Accept: application/x-custom, */*" is a plain example
+// -- the wildcard means HTML is acceptable, so GetPreferredFormat answers
+// "html", but a positional check that only honoured a leading "*/*" answered
+// false. HandleNotAuthenticated then skipped the login redirect and
+// SendErrorResponse, seeing "html" with no HTML branch, fell through to a
+// plain-text 401.
+//
+// Returns true when the Accept header is absent, names text/html, or reaches a
+// "*/*" without an earlier application/json or application/xml having already
+// settled the question.
 func IsHTMLRequest(c Context) bool {
-	acceptHeader := c.Get("Accept")
-	if acceptHeader == "" {
-		return true // Default to HTML request
-	}
-
-	acceptParts := strings.Split(acceptHeader, ",")
-	for i, acceptPart := range acceptParts {
-		// "*/*" only counts in first position, i.e. when the client expressed
-		// no preference at all. "application/json, */*" prefers JSON, and
-		// GetPreferredFormat agrees: it returns on the first match, so that
-		// header yields "json" there too.
-		format := strings.Trim(strings.SplitN(acceptPart, ";", 2)[0], " ")
-		if format == "text/html" || (i == 0 && format == "*/*") {
-			return true
-		}
-	}
-	return false
+	return GetPreferredFormat(c) == "html"
 }
 
 // IsJSONRequest checks if the request accepts JSON responses.

@@ -271,6 +271,11 @@ location / {
 
 location = /_auth {
     internal;
+
+    # 定义这个密钥。部署时用模板注入（envsubst / Ansible / Helm value 等）——
+    # $proxy_secret 不是 nginx 内置变量，只引用不定义会导致 nginx 启动失败。
+    set $proxy_secret "REPLACE_WITH_A_LONG_RANDOM_STRING";
+
     proxy_pass http://auth-service:3000/_auth;
     proxy_pass_request_body off;
     proxy_set_header Content-Length "";
