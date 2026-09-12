@@ -112,6 +112,17 @@ func splitOutsideQuotes(s string, sep byte) []string {
 		}
 	}
 
+	if inQuote {
+		// The quote was never closed, so the header is malformed and the
+		// quoting cannot be trusted to mean anything. Ignoring it entirely for
+		// this string is the recoverable reading: treating the rest as one
+		// quoted run let a single stray quote swallow every later media range,
+		// so `text/html;q=0;profile="oops, application/json;q=1` parsed as one
+		// refused HTML range and the JSON the client actually asked for
+		// disappeared.
+		return strings.Split(s, string(sep))
+	}
+
 	return append(parts, s[start:])
 }
 

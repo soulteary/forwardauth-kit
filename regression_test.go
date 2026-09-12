@@ -634,3 +634,48 @@ func TestAcceptParsingRespectsQuotedParameters(t *testing.T) {
 		})
 	}
 }
+
+// --- Codex review round 8 (PR #4) ---
+
+// TestUnmatchedQuoteDoesNotSwallowLaterRanges is the regression test for
+// splitOutsideQuotes never leaving quote state.
+//
+// An unmatched quote left inQuote set for the rest of the string, so every
+// later delimiter was suppressed and one stray quote swallowed every
+// subsequent media range: `text/html;q=0;profile="oops, application/json;q=1`
+// parsed as a single refused HTML range and the JSON the client actually asked
+// for disappeared, leaving "text".
+//
+// The round-7 unbalanced-quote case could not catch this -- it expected HTML
+// either way, so the assertion held whether or not the remainder was parsed.
+func TestUnmatchedQuoteDoesNotSwallowLaterRanges(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		accept string
+		want   string
+	}{
+		// The reported case: HTML refused, JSON requested, quote never closed.
+		{"refused html, unmatched quote", `text/html;q=0;profile="oops, application/json;q=1`, "json"},
+
+		// The later range is reachable at all.
+		{"unmatched quote then xml", `text/html;q=0;profile="oops, application/xml`, "xml"},
+
+		// A stray quote in a range that is not refused still resolves.
+		{"unmatched quote, html kept", `text/html;profile="oops, application/json;q=0`, "html"},
+
+		// Well-formed quoting must keep working exactly as before.
+		{"balanced still honoured", `text/html;profile="a,b";q=0, application/json;q=1`, "json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := newMockContext()
+			ctx.headers["Accept"] = tc.accept
+
+			if got := GetPreferredFormat(ctx); got != tc.want {
+				t.Errorf("GetPreferredFormat(%q) = %q, want %q", tc.accept, got, tc.want)
+			}
+			if got, format := IsHTMLRequest(ctx), GetPreferredFormat(ctx); got != (format == "html") {
+				t.Errorf("IsHTMLRequest = %v but GetPreferredFormat = %q", got, format)
+			}
+		})
+	}
+}
