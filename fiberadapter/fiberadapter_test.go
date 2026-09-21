@@ -2,6 +2,7 @@ package fiberadapter_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -548,4 +549,46 @@ func TestMiddlewareNilStore(t *testing.T) {
 	resp, err = app.Test(req)
 	require.NoError(t, err)
 	assert.Equal(t, 401, resp.StatusCode)
+}
+
+// failingStore is the other thing the Store interface buys: a store whose
+// lookup fails, which is not something a real *session.Store can be asked to
+// do on demand.
+type failingStore struct{ err error }
+
+func (s failingStore) Get(fiber.Ctx) (*session.Session, error) { return nil, s.err }
+
+// A store failure is the store's error, passed through unchanged -- the caller
+// has to be able to tell a backend outage from a context this adapter cannot
+// use, which is ErrInvalidConfig.
+func TestSessionStoreGetPassesStoreErrorThrough(t *testing.T) {
+	wantErr := errors.New("backend down")
+	fiberStore := fiberadapter.NewSessionStore(failingStore{err: wantErr})
+
+	app := fiber.New()
+	app.Get("/store", func(c fiber.Ctx) error {
+		sess, err := fiberStore.Get(fiberadapter.NewContext(c))
+		assert.Nil(t, sess)
+		assert.ErrorIs(t, err, wantErr)
+		return c.SendStatus(200)
+	})
+
+	resp, err := app.Test(httptest.NewRequest("GET", "/store", nil))
+	require.NoError(t, err)
+	assert.Equal(t, 200, resp.StatusCode)
+}
+
+// And the endpoint turns that into a 500, not a 401: an outage is not a
+// verdict on the user.
+func TestMiddlewareStoreFailureIsServerError(t *testing.T) {
+	handler := forwardauth.NewHandler(&forwardauth.Config{SessionEnabled: true})
+
+	app := fiber.New()
+	app.All("/_auth", fiberadapter.Middleware(handler, failingStore{err: errors.New("backend down")}))
+
+	req := httptest.NewRequest("GET", "/_auth", nil)
+	req.Header.Set("Accept", "application/json")
+	resp, err := app.Test(req)
+	require.NoError(t, err)
+	assert.Equal(t, 500, resp.StatusCode)
 }

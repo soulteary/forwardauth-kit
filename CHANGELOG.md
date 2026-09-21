@@ -127,7 +127,9 @@ also changes the module path. The current one is
 
   `Store` is what a Fiber session store looks like from here, so a store chosen
   per tenant, one that records metrics, or a test double all work where only
-  `*session.Store` did. `CtxSource` is what a `Context` has to offer to reach
+  `*session.Store` did — which is also how `SessionStore.Get`'s store-failure
+  path is now tested at all: a real `*session.Store` cannot be asked to fail on
+  demand. `CtxSource` is what a `Context` has to offer to reach
   the Fiber request behind it — previously the session store asserted the
   concrete `*FiberContext`, so a caller's own wrapper came back as
   `ErrInvalidConfig` with nothing saying why.
