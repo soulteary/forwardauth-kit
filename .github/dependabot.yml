@@ -1,0 +1,30 @@
+version: 2
+
+# Minor and patch updates are grouped into one PR so the weekly churn is one
+# review, not eight. Majors are left separate: for this module a dependency
+# major is a judgement call, not something to batch.
+#
+# The release gate is an action too, so a silently stale action would be a
+# stale release check.
+updates:
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      go-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      actions-minor-and-patch:
+        update-types:
+          - minor
+          - patch

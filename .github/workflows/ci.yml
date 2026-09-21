@@ -102,6 +102,37 @@ jobs:
           args: --timeout=5m
           only-new-issues: false
 
+  # The split is only worth anything while it holds. One stray import in the
+  # root package or in httpadapter puts a third-party module back into every
+  # consumer's go.sum, and nothing else here would notice.
+  layout:
+    name: Stdlib-Only Package Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Go environment
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Root package and httpadapter must import only the standard library
+        run: |
+          set -euo pipefail
+          module="$(go list -m)"
+          status=0
+          for pkg in . ./httpadapter; do
+            external="$(go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' "$pkg" \
+              | grep -v "^${module}\(/\|$\)" || true)"
+            if [ -n "$external" ]; then
+              echo "::error::$pkg imports packages outside the standard library:"
+              echo "$external"
+              status=1
+            fi
+          done
+          exit $status
+
   # Dependency security scan
   security-scan:
     name: Dependency Security Scan

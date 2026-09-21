@@ -45,6 +45,20 @@ type SessionStore interface {
 	Get(c Context) (Session, error)
 }
 
+// SessionStoreFunc adapts a plain function to SessionStore.
+//
+// Outside Fiber there is no one session library to adapt, so this is the whole
+// integration point: wrap whatever gorilla/sessions, scs or a hand-rolled
+// store hands back in something satisfying Session, and return it from here.
+//
+//	store := forwardauth.SessionStoreFunc(func(c forwardauth.Context) (forwardauth.Session, error) {
+//		return mySession(c.Context())
+//	})
+type SessionStoreFunc func(c Context) (Session, error)
+
+// Get implements SessionStore.
+func (f SessionStoreFunc) Get(c Context) (Session, error) { return f(c) }
+
 // AuthResult contains the result of an authentication check.
 type AuthResult struct {
 	Authenticated bool

@@ -1,6 +1,6 @@
 # forwardauth-kit
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/soulteary/forwardauth-kit/v2.svg)](https://pkg.go.dev/github.com/soulteary/forwardauth-kit/v2)
+[![Go Reference](https://pkg.go.dev/badge/github.com/soulteary/forwardauth-kit/v3.svg)](https://pkg.go.dev/github.com/soulteary/forwardauth-kit/v3)
 [![Go Report Card](.github/goreportcard.svg)](.github/goreportcard-report.md)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![codecov](https://codecov.io/gh/soulteary/forwardauth-kit/graph/badge.svg)](https://codecov.io/gh/soulteary/forwardauth-kit)
@@ -16,23 +16,83 @@ A Go library providing ForwardAuth middleware for reverse proxy authentication. 
 - **Step-up Authentication**: Support for sensitive path protection with additional authentication
 - **Auth Refresh**: Automatic refresh of user authorization information
 - **Flexible Header Mapping**: Customizable authentication response headers
-- **Framework Agnostic**: Core logic is framework-independent with Fiber adapter included
+- **Framework Agnostic**: The root package depends on nothing outside the standard library; net/http and Fiber v3 live in adapter subpackages
 - **Cross-domain Support**: Cookie utilities for cross-domain authentication flows
 
 ## Requirements
 
 - **Go 1.27+** (`go.mod` declares `go 1.27.0`)
-- Fiber v3.4.0 or later for the `Fiber*` adapters; the core is framework-agnostic
+- Nothing else for the root package or `httpadapter` — both are standard library only
+- Fiber v3.4.0 or later, but only if you import `fiberadapter`
 
 ## Installation
 
 ```bash
-go get github.com/soulteary/forwardauth-kit/v2
+go get github.com/soulteary/forwardauth-kit/v3
 ```
 
-Fiber integrations require Fiber v3.4.0 or later. Applications that still use Fiber v2 should remain on `github.com/soulteary/forwardauth-kit` v1.
+Applications that still use Fiber v2 should remain on `github.com/soulteary/forwardauth-kit` v1.
+
+## Layout
+
+The root package holds the whole decision — the config, the checkers that read
+a request, the handler that runs them in priority order, and the builder that
+turns the result into headers — expressed against the `Context` and `Session`
+abstractions rather than any web framework. It imports nothing outside the
+standard library.
+
+Each framework lives in a subpackage, so importing the root package never links
+a framework you do not use:
+
+| Package | Brings in |
+|---|---|
+| `github.com/soulteary/forwardauth-kit/v3` | nothing outside the standard library |
+| `.../v3/httpadapter` | net/http — so, nothing |
+| `.../v3/fiberadapter` | Fiber v3, and with it fasthttp |
+
+A net/http service pays nothing for Fiber support existing. Measured against
+v2.2.0 for a program importing only the root package: 193 fewer linked
+packages, 20 modules out of `go.sum`, and a binary 64.9% smaller. See the
+[CHANGELOG](CHANGELOG.md) for the full table.
 
 ## Quick Start
+
+### Basic net/http Integration
+
+```go
+package main
+
+import (
+    "net/http"
+
+    forwardauth "github.com/soulteary/forwardauth-kit/v3"
+    "github.com/soulteary/forwardauth-kit/v3/httpadapter"
+)
+
+func main() {
+    config := forwardauth.Config{
+        SessionEnabled: true,
+        AuthHost:       "auth.example.com",
+        LoginPath:      "/_login",
+    }
+    if err := config.Validate(); err != nil {
+        panic(err)
+    }
+
+    handler := forwardauth.NewHandler(&config)
+
+    mux := http.NewServeMux()
+    // nil store: no session, the request is judged on its headers. Pass a
+    // forwardauth.SessionStoreFunc to plug in a session library.
+    mux.Handle("/_auth", httpadapter.CheckRoute(handler, nil))
+
+    http.ListenAndServe(":3000", mux)
+}
+```
+
+`httpadapter` covers Echo, Gin and chi as it stands: all three hand out an
+`http.ResponseWriter` and an `*http.Request`, which is what `httpadapter.NewContext`
+takes.
 
 ### Basic Fiber Integration
 
@@ -42,7 +102,8 @@ package main
 import (
     "github.com/gofiber/fiber/v3"
     "github.com/gofiber/fiber/v3/middleware/session"
-    forwardauth "github.com/soulteary/forwardauth-kit/v2"
+    forwardauth "github.com/soulteary/forwardauth-kit/v3"
+    "github.com/soulteary/forwardauth-kit/v3/fiberadapter"
 )
 
 func main() {
@@ -59,7 +120,7 @@ func main() {
     handler := forwardauth.NewHandler(&config)
 
     // Register ForwardAuth check route
-    app.All("/_auth", forwardauth.FiberCheckRoute(handler, store))
+    app.All("/_auth", fiberadapter.CheckRoute(handler, store))
 
     app.Listen(":3000")
 }
@@ -356,6 +417,39 @@ func (c *CustomChecker) Name() string { return "custom" }
 handler.AddChecker(&CustomChecker{config: &config})
 ```
 
+## Writing an Adapter for Another Framework
+
+The whole endpoint is `Handler.ServeWithStore`, which knows about no web
+framework: fetch the session, run the checks, answer a failure, emit the
+headers and 200 on success. An adapter implements `forwardauth.Context` over
+the framework's request type and calls it.
+
+```go
+func Handler(h *forwardauth.Handler, store forwardauth.SessionStore) myframework.Handler {
+    return func(c myframework.Ctx) error {
+        return h.ServeWithStore(myContext{c}, store)
+    }
+}
+```
+
+That is all `httpadapter` is, and all `fiberadapter` is beyond the Fiber
+session store it wraps. Nothing about *when* a request counts as authenticated
+belongs in adapter code — a second copy of that sequence is a second set of
+rules, and on an authentication endpoint the drift means one framework
+admitting a request the other refuses.
+
+Sessions plug in through `SessionStoreFunc`, which adapts a plain function:
+
+```go
+store := forwardauth.SessionStoreFunc(func(c forwardauth.Context) (forwardauth.Session, error) {
+    return wrapMySession(mySessions.Get(c.Context()))
+})
+```
+
+Pass `nil` instead when there is no session — the ordinary shape of a
+ForwardAuth deployment whose sessions live in the authentication service, and
+of one using only password or header authentication.
+
 ## Traefik Configuration
 
 ```yaml
@@ -427,6 +521,60 @@ its leading entries are whatever the client chose. Use `$remote_addr`, not the
 header, if you need the peer address -- and note that `forwardauth.Context`
 does not expose it, so a peer-address check has to happen in your adapter
 before the handler runs.
+
+## Upgrade Notes (v3.0.0)
+
+**Every user must change the import path**, including net/http users who are
+otherwise unaffected: Go encodes the major version in it, and this release
+removes exported symbols.
+
+```
+github.com/soulteary/forwardauth-kit/v2  ->  github.com/soulteary/forwardauth-kit/v3
+```
+
+**Fiber moved to the `fiberadapter` subpackage.** Add the import and drop the
+`Fiber` prefix:
+
+| v2 | v3 |
+|---|---|
+| `forwardauth.FiberContext` | `fiberadapter.Context` |
+| `forwardauth.NewFiberContext` | `fiberadapter.NewContext` |
+| `forwardauth.FiberSession` | `fiberadapter.Session` |
+| `forwardauth.NewFiberSession` | `fiberadapter.NewSession` |
+| `forwardauth.FiberSessionStore` | `fiberadapter.SessionStore` |
+| `forwardauth.NewFiberSessionStore` | `fiberadapter.NewSessionStore` |
+| `forwardauth.FiberMiddleware` | `fiberadapter.Middleware` |
+| `forwardauth.FiberCheckRoute` | `fiberadapter.CheckRoute` |
+| `forwardauth.FiberCookieHelper` | `fiberadapter.CookieHelper` |
+| `forwardauth.NewFiberCookieHelper` | `fiberadapter.NewCookieHelper` |
+
+`Underlying()` on those wrappers is now `Unwrap()`.
+
+There are no deprecated shims, and there could not be: a shim has to import
+Fiber, which relinks fasthttp and gives back the entire benefit of the move.
+
+Nothing else changed. `Config`, `Handler`, the checkers, `AuthHeaderBuilder`,
+`ForwardedHeaders` and the response helpers keep their signatures and their
+behaviour. A Fiber service's own footprint is unchanged too — one extra linked
+package, which is the adapter.
+
+**New, and optional:**
+
+- `httpadapter` — a net/http adapter, standard library throughout.
+- `Handler.Serve` / `Handler.ServeWithStore` — the endpoint without a
+  framework, which is what an adapter calls.
+- `Handler.HandleCheckError` — the endpoint's answer for a `Check` failure,
+  for a caller that ran `Check` itself and does not want to run it twice.
+- `SessionStoreFunc` — a plain function as a `SessionStore`.
+- `fiberadapter.Store` and `fiberadapter.CtxSource` — the small interfaces the
+  Fiber adapter needs, so a wrapped store or a wrapped context works where only
+  the concrete types did.
+
+**One behaviour change:** a `Check` error that *wraps* a sentinel is now read
+for what it wraps. A custom checker returning
+`fmt.Errorf("...: %w", forwardauth.ErrStepUpRequired)` now gets the step-up
+redirect; before, identity comparison sent it to the login page, which cannot
+resolve a step-up requirement because the user is already authenticated.
 
 ## Upgrade Notes (v2.2.0)
 

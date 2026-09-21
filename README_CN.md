@@ -1,6 +1,6 @@
 # forwardauth-kit
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/soulteary/forwardauth-kit/v2.svg)](https://pkg.go.dev/github.com/soulteary/forwardauth-kit/v2)
+[![Go Reference](https://pkg.go.dev/badge/github.com/soulteary/forwardauth-kit/v3.svg)](https://pkg.go.dev/github.com/soulteary/forwardauth-kit/v3)
 [![Go Report Card](.github/goreportcard.svg)](.github/goreportcard-report.md)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![codecov](https://codecov.io/gh/soulteary/forwardauth-kit/graph/badge.svg)](https://codecov.io/gh/soulteary/forwardauth-kit)
@@ -16,23 +16,78 @@ ForwardAuth 中间件库，用于反向代理认证。支持多种认证方式�
 - **Step-up 认证**：敏感路径二次认证保护
 - **授权刷新**：自动刷新用户授权信息
 - **灵活的 Header 映射**：可自定义认证响应头
-- **框架无关**：核心逻辑框架无关，内置 Fiber 适配器
+- **框架无关**：根包只依赖标准库，net/http 与 Fiber v3 分别放在适配器子包中
 - **跨域支持**：跨域认证流程的 Cookie 工具
 
 ## 环境要求
 
 - **Go 1.27+**（`go.mod` 声明 `go 1.27.0`）
-- `Fiber*` 适配器需要 Fiber v3.4.0 或更高版本；核心逻辑与框架无关
+- 根包与 `httpadapter` 无需其他依赖，二者只用标准库
+- 只有在导入 `fiberadapter` 时才需要 Fiber v3.4.0 或更高版本
 
 ## 安装
 
 ```bash
-go get github.com/soulteary/forwardauth-kit/v2
+go get github.com/soulteary/forwardauth-kit/v3
 ```
 
-Fiber 集成要求 Fiber v3.4.0 或更高版本。仍使用 Fiber v2 的应用应继续使用 `github.com/soulteary/forwardauth-kit` v1。
+仍使用 Fiber v2 的应用应继续使用 `github.com/soulteary/forwardauth-kit` v1。
+
+## 包结构
+
+根包承载了全部决策逻辑——配置、读取请求的检查器、按优先级运行检查器的 handler，
+以及把结果转成 Header 的 builder——它们都构建在 `Context` 和 `Session` 抽象之上，
+而不依赖任何 Web 框架。根包不引入标准库以外的任何依赖。
+
+每个框架各自放在一个子包里，因此导入根包永远不会链接你用不到的框架：
+
+| 包 | 引入的依赖 |
+|---|---|
+| `github.com/soulteary/forwardauth-kit/v3` | 标准库以外无任何依赖 |
+| `.../v3/httpadapter` | net/http，即无额外依赖 |
+| `.../v3/fiberadapter` | Fiber v3，以及随之而来的 fasthttp |
+
+net/http 服务不会为「Fiber 支持存在」付出任何代价。以只导入根包的程序为例，
+相对 v2.2.0 实测：链接包数少 193 个，`go.sum` 少 20 个模块，二进制体积小 64.9%。
+完整对比见 [CHANGELOG](CHANGELOG.md)。
 
 ## 快速开始
+
+### net/http 基础集成
+
+```go
+package main
+
+import (
+    "net/http"
+
+    forwardauth "github.com/soulteary/forwardauth-kit/v3"
+    "github.com/soulteary/forwardauth-kit/v3/httpadapter"
+)
+
+func main() {
+    config := forwardauth.Config{
+        SessionEnabled: true,
+        AuthHost:       "auth.example.com",
+        LoginPath:      "/_login",
+    }
+    if err := config.Validate(); err != nil {
+        panic(err)
+    }
+
+    handler := forwardauth.NewHandler(&config)
+
+    mux := http.NewServeMux()
+    // store 传 nil 表示不使用 session，仅依据请求头判定。
+    // 需要接入 session 库时，传入 forwardauth.SessionStoreFunc。
+    mux.Handle("/_auth", httpadapter.CheckRoute(handler, nil))
+
+    http.ListenAndServe(":3000", mux)
+}
+```
+
+`httpadapter` 同样适用于 Echo、Gin 和 chi：这三者都能拿到
+`http.ResponseWriter` 与 `*http.Request`，正是 `httpadapter.NewContext` 所需要的。
 
 ### Fiber 基础集成
 
@@ -42,7 +97,8 @@ package main
 import (
     "github.com/gofiber/fiber/v3"
     "github.com/gofiber/fiber/v3/middleware/session"
-    forwardauth "github.com/soulteary/forwardauth-kit/v2"
+    forwardauth "github.com/soulteary/forwardauth-kit/v3"
+    "github.com/soulteary/forwardauth-kit/v3/fiberadapter"
 )
 
 func main() {
@@ -59,7 +115,7 @@ func main() {
     handler := forwardauth.NewHandler(&config)
 
     // 注册 ForwardAuth 检查路由
-    app.All("/_auth", forwardauth.FiberCheckRoute(handler, store))
+    app.All("/_auth", fiberadapter.CheckRoute(handler, store))
 
     app.Listen(":3000")
 }
@@ -345,6 +401,36 @@ func (c *CustomChecker) Name() string { return "custom" }
 handler.AddChecker(&CustomChecker{config: &config})
 ```
 
+## 为其他框架编写适配器
+
+整个端点就是 `Handler.ServeWithStore`，它不涉及任何 Web 框架：取出 session、
+运行检查、对失败给出应答、成功时写入 Header 并返回 200。适配器要做的，是在框架
+自己的请求类型上实现 `forwardauth.Context`，然后调用它。
+
+```go
+func Handler(h *forwardauth.Handler, store forwardauth.SessionStore) myframework.Handler {
+    return func(c myframework.Ctx) error {
+        return h.ServeWithStore(myContext{c}, store)
+    }
+}
+```
+
+`httpadapter` 的全部内容就是这些，`fiberadapter` 除了额外包装 Fiber 的 session
+store 之外也是如此。「一个请求在什么条件下算通过认证」这件事不属于适配器代码——
+那套流程一旦抄出第二份，就是第二套规则；而在认证端点上，规则漂移意味着一个框架
+放行了另一个框架会拒绝的请求。
+
+Session 通过 `SessionStoreFunc` 接入，它把一个普通函数适配成 `SessionStore`：
+
+```go
+store := forwardauth.SessionStoreFunc(func(c forwardauth.Context) (forwardauth.Session, error) {
+    return wrapMySession(mySessions.Get(c.Context()))
+})
+```
+
+不需要 session 时直接传 `nil`——session 存放在认证服务一侧的 ForwardAuth 部署，
+以及只使用密码或 Header 认证的部署，都是这种形态。
+
 ## Traefik 配置
 
 ```yaml
@@ -413,6 +499,54 @@ location = /_auth {
 都是客户端自己填的。需要对端地址时请使用 `$remote_addr` 而非该 Header；
 另外 `forwardauth.Context` 并不暴露对端地址，这类校验需要在进入 handler
 之前、在你的适配层完成。
+
+## 升级说明（v3.0.0）
+
+**所有用户都必须修改 import 路径**，包括本来不受影响的 net/http 用户：Go 把主版本号
+编码在 import 路径里，而这个版本删除了导出符号。
+
+```
+github.com/soulteary/forwardauth-kit/v2  ->  github.com/soulteary/forwardauth-kit/v3
+```
+
+**Fiber 相关代码移到了 `fiberadapter` 子包。** 加上这个 import，并去掉 `Fiber` 前缀：
+
+| v2 | v3 |
+|---|---|
+| `forwardauth.FiberContext` | `fiberadapter.Context` |
+| `forwardauth.NewFiberContext` | `fiberadapter.NewContext` |
+| `forwardauth.FiberSession` | `fiberadapter.Session` |
+| `forwardauth.NewFiberSession` | `fiberadapter.NewSession` |
+| `forwardauth.FiberSessionStore` | `fiberadapter.SessionStore` |
+| `forwardauth.NewFiberSessionStore` | `fiberadapter.NewSessionStore` |
+| `forwardauth.FiberMiddleware` | `fiberadapter.Middleware` |
+| `forwardauth.FiberCheckRoute` | `fiberadapter.CheckRoute` |
+| `forwardauth.FiberCookieHelper` | `fiberadapter.CookieHelper` |
+| `forwardauth.NewFiberCookieHelper` | `fiberadapter.NewCookieHelper` |
+
+这些包装类型上的 `Underlying()` 改名为 `Unwrap()`。
+
+这里没有保留兼容 shim，也不可能保留：shim 必须 import Fiber，那就会把 fasthttp
+重新链接回来，拆分的收益全部归零。
+
+其余部分没有变化。`Config`、`Handler`、各个检查器、`AuthHeaderBuilder`、
+`ForwardedHeaders` 以及响应辅助函数的签名和行为都保持原样。Fiber 服务自身的体积
+也没有变化——只多链接了一个包，就是适配器本身。
+
+**新增内容（都是可选的）：**
+
+- `httpadapter`——net/http 适配器，全部基于标准库。
+- `Handler.Serve` / `Handler.ServeWithStore`——不带框架的端点逻辑，适配器调用的就是它。
+- `Handler.HandleCheckError`——对 `Check` 失败给出端点自己的应答，供那些已经自行
+  调用过 `Check`、不希望再跑一遍的调用方使用。
+- `SessionStoreFunc`——把普通函数当作 `SessionStore`。
+- `fiberadapter.Store` 与 `fiberadapter.CtxSource`——Fiber 适配器真正需要的小接口，
+  这样被包装过的 store 或 context 也能工作，而不再只接受具体类型。
+
+**一处行为变化：** 现在会按 `Check` 错误所**包装**的目标来判断。自定义检查器返回
+`fmt.Errorf("...: %w", forwardauth.ErrStepUpRequired)` 时会正确跳转到 step-up；
+此前按值比较会把它当成未认证而跳转到登录页，而登录页解决不了 step-up 要求——
+用户本来就已经通过认证了。
 
 ## 升级说明（v2.2.0）
 
