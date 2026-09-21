@@ -1,6 +1,3 @@
-// Package forwardauth provides ForwardAuth middleware for reverse proxy authentication.
-// It supports multiple authentication methods and integrates with session management
-// for use with Traefik, Nginx, and other reverse proxies supporting ForwardAuth.
 package forwardauth
 
 import (

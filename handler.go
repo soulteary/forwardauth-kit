@@ -1,6 +1,7 @@
 package forwardauth
 
 import (
+	"errors"
 	"net/url"
 	"sort"
 	"time"
@@ -51,6 +52,66 @@ func (h *Handler) AddChecker(checker AuthChecker) {
 	sort.Slice(h.checkers, func(i, j int) bool {
 		return h.checkers[i].Priority() < h.checkers[j].Priority()
 	})
+}
+
+// Serve runs the whole ForwardAuth endpoint for one request: the
+// authentication check, the response to a failed one, and the authentication
+// headers plus 200 on a successful one.
+//
+// It speaks only Context and Session, so it knows nothing about any web
+// framework -- which is the point. Every adapter calls this rather than
+// writing the sequence out again, because a second copy is a second set of
+// rules about when a request is authenticated, and the two drift. See
+// ServeWithStore for the usual entry point, and the fiberadapter and
+// httpadapter subpackages for what an adapter has left to do.
+func (h *Handler) Serve(c Context, sess Session) error {
+	result, err := h.Check(c, sess)
+	if err != nil {
+		return h.HandleCheckError(c, err)
+	}
+
+	h.SetAuthHeaders(c, result)
+	return c.SendStatus(200)
+}
+
+// HandleCheckError writes the response for an error Check returned.
+//
+// Serve is the whole endpoint and calls this itself; it is exported for a
+// caller that runs Check on its own -- to inspect the AuthResult, or to
+// authorize a route in process -- and then wants the endpoint's own answer for
+// the failure, rather than re-running the checks to get it. Re-running them is
+// not free: HeaderAuthCheckFunc and HeaderAuthGetInfoFunc are usually
+// directory lookups.
+func (h *Handler) HandleCheckError(c Context, err error) error {
+	// errors.Is, not ==: a custom AuthChecker is free to wrap these sentinels
+	// with %w to say which check refused, and a wrapped ErrStepUpRequired
+	// means step-up just as plainly as a bare one. Comparing by identity sent
+	// it to the login redirect instead, which is the one answer that cannot
+	// resolve it -- the user is already authenticated.
+	if errors.Is(err, ErrStepUpRequired) {
+		return h.HandleStepUpRequired(c)
+	}
+	return h.HandleNotAuthenticated(c)
+}
+
+// ServeWithStore is Serve with the session fetched from store first, and is
+// what an adapter's endpoint handler is.
+//
+// A nil store means no session: the request is checked on its headers alone.
+// That is the ordinary shape of a ForwardAuth deployment whose sessions live
+// in the authentication service rather than in this endpoint, and of one using
+// only password or header authentication.
+func (h *Handler) ServeWithStore(c Context, store SessionStore) error {
+	var sess Session
+	if store != nil {
+		s, err := store.Get(c)
+		if err != nil {
+			return h.HandleSessionError(c, err)
+		}
+		sess = s
+	}
+
+	return h.Serve(c, sess)
 }
 
 // Check performs the full authentication check.
