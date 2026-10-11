@@ -1,9 +1,6 @@
 # forwardauth-kit
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/soulteary/forwardauth-kit/v3.svg)](https://pkg.go.dev/github.com/soulteary/forwardauth-kit/v3)
-[![Go Report Card](.github/goreportcard.svg)](.github/goreportcard-report.md)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![codecov](https://codecov.io/gh/soulteary/forwardauth-kit/graph/badge.svg)](https://codecov.io/gh/soulteary/forwardauth-kit)
+[![Go Reference](https://pkg.go.dev/badge/github.com/soulteary/forwardauth-kit/v3.svg)](https://pkg.go.dev/github.com/soulteary/forwardauth-kit/v3) [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE) [![Go Test Coverage](./.github/coverage.svg)](./.github/go-test-report.md) [![Go Report Card](./.github/goreportcard.svg)](./.github/goreportcard-report.md)
 
 [中文文档](README_CN.md)
 
