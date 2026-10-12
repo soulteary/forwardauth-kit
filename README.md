@@ -18,7 +18,7 @@ A Go library providing ForwardAuth middleware for reverse proxy authentication. 
 
 ## Requirements
 
-- **Go 1.27+** (`go.mod` declares `go 1.27.2`)
+- **Go 1.27.2+** (`go.mod` declares `go 1.27.2`)
 - Nothing else for the root package or `httpadapter` — both are standard library only
 - Fiber v3.4.0 or later, but only if you import `fiberadapter`
 
