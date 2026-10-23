@@ -10,6 +10,15 @@ also changes the module path. The current one is
 
 ## [Unreleased]
 
+## [3.0.3] — 2026-10-23
+
+### Changed
+
+- Update Fiber from 3.5.0 to 3.6.1, with `gofiber/utils/v2` 2.6.1 → 2.6.2
+  and `klauspost/compress` 1.20.1 → 1.20.3.
+- Update checkout/setup-go actions to v7 in CI, quality reports and release
+  verification. Go 1.27.3, the `/v3` module path and public API are unchanged.
+
 ## [3.0.0] — 2026-09-21
 
 ### Changed — BREAKING
@@ -199,7 +208,8 @@ also changes the module path. The current one is
 - Fiber v3. Applications still on Fiber v2 should stay on
   `github.com/soulteary/forwardauth-kit` v1.
 
-[Unreleased]: https://github.com/soulteary/forwardauth-kit/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/soulteary/forwardauth-kit/compare/v3.0.3...HEAD
+[3.0.3]: https://github.com/soulteary/forwardauth-kit/compare/v3.0.2...v3.0.3
 [3.0.0]: https://github.com/soulteary/forwardauth-kit/compare/v2.2.0...v3.0.0
 [2.2.0]: https://github.com/soulteary/forwardauth-kit/compare/v2.1.0...v2.2.0
 [2.0.0]: https://github.com/soulteary/forwardauth-kit/compare/v1.3.0...v2.0.0
