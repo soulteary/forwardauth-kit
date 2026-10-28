@@ -10,6 +10,18 @@ also changes the module path. The current one is
 
 ## [Unreleased]
 
+## [3.0.4] — 2026-10-28
+
+### Changed
+
+- Update compatible Fiber-adapter dependencies: schema 1.8.8 → 1.9.1,
+  utils/v2 2.6.2 → 2.6.3, go-brrr 1.3.0 → 1.3.1, fwd 1.2.0 → 1.2.1,
+  fasthttp 1.75.0 → 1.77.0, and x/net 0.61.0 → 0.62.0.
+- Align CI and release report binaries with the pinned Action wrappers:
+  go-test-report 1.1.3 and goreportcard 1.1.4.
+- Keep Go 1.27.3, the `/v3` module path and public API unchanged. The root
+  package and httpadapter still depend only on the standard library.
+
 ## [3.0.3] — 2026-10-23
 
 ### Changed
