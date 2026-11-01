@@ -1,11 +1,11 @@
 # Go Report Card
 
-**Grade: A+** (98.4%)
+**Grade: A+** (100.0%)
 
 | Metric | Value |
 | ------ | ----- |
 | Files | 22 |
-| Issues | 3 |
+| Issues | 0 |
 
 ## Checks
 
@@ -13,22 +13,12 @@
 | ----- | ----- |
 | gofmt | 100% |
 | go_vet | 100% |
-| gocyclo | 86% |
+| gocyclo | 100% |
 | ineffassign | 100% |
 | license | 100% |
 | misspell | 100% |
 
-## Issues
-
-### gocyclo
-
-- `checker.go`
-  - Line 173: cyclomatic complexity 22 for function (*SessionChecker).Check
-- `handler.go`
-  - Line 184: cyclomatic complexity 17 for function (*Handler).refreshAuthInfo
-  - Line 118: cyclomatic complexity 17 for function (*Handler).Check
-- `config.go`
-  - Line 219: cyclomatic complexity 16 for function (*Config).ApplyDefaults
+No issues found. Nice work!
 
 ---
 
