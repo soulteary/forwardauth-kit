@@ -116,33 +116,7 @@ func (h *Handler) ServeWithStore(c Context, store SessionStore) error {
 
 // Check performs the full authentication check.
 func (h *Handler) Check(c Context, sess Session) (*AuthResult, error) {
-	var lastErr error
-	var result *AuthResult
-
-	// Try each checker in priority order
-	for _, checker := range h.checkers {
-		r, err := checker.Check(c, sess)
-		if err != nil {
-			lastErr = err
-			if h.config.Logger != nil {
-				h.config.Logger.Debug().
-					Str("checker", checker.Name()).
-					Err(err).
-					Msg("Auth checker failed")
-			}
-			continue
-		}
-		if r != nil && r.Authenticated {
-			result = r
-			if h.config.Logger != nil {
-				h.config.Logger.Debug().
-					Str("checker", checker.Name()).
-					Str("method", r.AuthMethod.String()).
-					Msg("Authentication successful")
-			}
-			break
-		}
-	}
+	result, lastErr := h.checkAuthentication(c, sess)
 
 	if result == nil {
 		if lastErr != nil {
@@ -186,20 +160,8 @@ func (h *Handler) refreshAuthInfo(c Context, sess Session, result *AuthResult) {
 		return
 	}
 
-	userPhone := ""
-	userMail := ""
-
-	// Get identifiers from session
-	if val := sess.Get(KeyUserPhone); val != nil {
-		if phone, ok := val.(string); ok {
-			userPhone = phone
-		}
-	}
-	if val := sess.Get(KeyUserMail); val != nil {
-		if mail, ok := val.(string); ok {
-			userMail = mail
-		}
-	}
+	userPhone, _ := sess.Get(KeyUserPhone).(string)
+	userMail, _ := sess.Get(KeyUserMail).(string)
 
 	if userPhone == "" && userMail == "" {
 		return
@@ -450,4 +412,36 @@ func (h *Handler) stepUpRequiredFor(c Context) bool {
 		return h.stepUpMatcher.RequiresStepUp(canonical)
 	}
 	return false
+}
+
+func (h *Handler) checkAuthentication(c Context, sess Session) (*AuthResult, error) {
+	var lastErr error
+	var result *AuthResult
+
+	// Try each checker in priority order
+	for _, checker := range h.checkers {
+		r, err := checker.Check(c, sess)
+		if err != nil {
+			lastErr = err
+			if h.config.Logger != nil {
+				h.config.Logger.Debug().
+					Str("checker", checker.Name()).
+					Err(err).
+					Msg("Auth checker failed")
+			}
+			continue
+		}
+		if r != nil && r.Authenticated {
+			result = r
+			if h.config.Logger != nil {
+				h.config.Logger.Debug().
+					Str("checker", checker.Name()).
+					Str("method", r.AuthMethod.String()).
+					Msg("Authentication successful")
+			}
+			break
+		}
+	}
+
+	return result, lastErr
 }

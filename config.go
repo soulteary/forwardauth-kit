@@ -237,27 +237,8 @@ func (c *Config) ApplyDefaults() {
 	if c.AuthRefreshInterval == 0 {
 		c.AuthRefreshInterval = defaults.AuthRefreshInterval
 	}
-	if c.UserHeaderName == "" {
-		c.UserHeaderName = defaults.UserHeaderName
-	}
-	if c.AuthUserHeader == "" {
-		c.AuthUserHeader = defaults.AuthUserHeader
-	}
-	if c.AuthEmailHeader == "" {
-		c.AuthEmailHeader = defaults.AuthEmailHeader
-	}
-	if c.AuthNameHeader == "" {
-		c.AuthNameHeader = defaults.AuthNameHeader
-	}
-	if c.AuthScopesHeader == "" {
-		c.AuthScopesHeader = defaults.AuthScopesHeader
-	}
-	if c.AuthRoleHeader == "" {
-		c.AuthRoleHeader = defaults.AuthRoleHeader
-	}
-	if c.AuthAMRHeader == "" {
-		c.AuthAMRHeader = defaults.AuthAMRHeader
-	}
+	c.applyHeaderDefaults(defaults)
+
 	if c.LoginPath == "" {
 		c.LoginPath = defaults.LoginPath
 	}
@@ -362,5 +343,29 @@ func ProxySecretTrustFunc(header, secret string) func(c Context) bool {
 			return false
 		}
 		return subtle.ConstantTimeCompare([]byte(got), want) == 1
+	}
+}
+
+func (c *Config) applyHeaderDefaults(defaults Config) {
+	if c.UserHeaderName == "" {
+		c.UserHeaderName = defaults.UserHeaderName
+	}
+	if c.AuthUserHeader == "" {
+		c.AuthUserHeader = defaults.AuthUserHeader
+	}
+	if c.AuthEmailHeader == "" {
+		c.AuthEmailHeader = defaults.AuthEmailHeader
+	}
+	if c.AuthNameHeader == "" {
+		c.AuthNameHeader = defaults.AuthNameHeader
+	}
+	if c.AuthScopesHeader == "" {
+		c.AuthScopesHeader = defaults.AuthScopesHeader
+	}
+	if c.AuthRoleHeader == "" {
+		c.AuthRoleHeader = defaults.AuthRoleHeader
+	}
+	if c.AuthAMRHeader == "" {
+		c.AuthAMRHeader = defaults.AuthAMRHeader
 	}
 }

@@ -192,33 +192,10 @@ func (c *SessionChecker) Check(ctx Context, sess Session) (*AuthResult, error) {
 		AuthMethod:    AuthMethodSession,
 	}
 
-	// Get user ID
-	if val := sess.Get(KeyUserID); val != nil {
-		if id, ok := val.(string); ok {
-			result.UserID = id
-		}
-	}
-
-	// Get email
-	if val := sess.Get(KeyUserMail); val != nil {
-		if mail, ok := val.(string); ok {
-			result.Email = mail
-		}
-	}
-
-	// Get phone
-	if val := sess.Get(KeyUserPhone); val != nil {
-		if phone, ok := val.(string); ok {
-			result.Phone = phone
-		}
-	}
-
-	// Get name
-	if val := sess.Get(KeyUserName); val != nil {
-		if name, ok := val.(string); ok {
-			result.Name = name
-		}
-	}
+	result.UserID, _ = sess.Get(KeyUserID).(string)
+	result.Email, _ = sess.Get(KeyUserMail).(string)
+	result.Phone, _ = sess.Get(KeyUserPhone).(string)
+	result.Name, _ = sess.Get(KeyUserName).(string)
 
 	// Get scopes
 	if val := sess.Get(KeyUserScope); val != nil {
@@ -230,12 +207,7 @@ func (c *SessionChecker) Check(ctx Context, sess Session) (*AuthResult, error) {
 		}
 	}
 
-	// Get role
-	if val := sess.Get(KeyUserRole); val != nil {
-		if role, ok := val.(string); ok {
-			result.Role = role
-		}
-	}
+	result.Role, _ = sess.Get(KeyUserRole).(string)
 
 	// Get AMR
 	if val := sess.Get(KeyUserAMR); val != nil {
