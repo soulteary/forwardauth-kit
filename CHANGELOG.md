@@ -10,6 +10,18 @@ also changes the module path. The current one is
 
 ## [Unreleased]
 
+## [3.0.5] — 2026-11-01
+
+### Changed
+
+- Update the Fiber adapter's runtime-transitive `gofiber/schema` dependency
+  from 1.9.1 to 1.9.2 and test-only YAML from 3.0.5 to 3.0.6.
+- Simplify optional session string reads and separate checker iteration and
+  header defaults without changing authentication priority, refresh/revocation,
+  step-up checks, or configuration behavior.
+- Regenerate complete Go quality evidence with all six checks at 100% and no
+  issues. Go 1.27.3, the module path, and the public API remain unchanged.
+
 ## [3.0.4] — 2026-10-28
 
 ### Changed
@@ -220,7 +232,8 @@ also changes the module path. The current one is
 - Fiber v3. Applications still on Fiber v2 should stay on
   `github.com/soulteary/forwardauth-kit` v1.
 
-[Unreleased]: https://github.com/soulteary/forwardauth-kit/compare/v3.0.3...HEAD
+[Unreleased]: https://github.com/soulteary/forwardauth-kit/compare/v3.0.5...HEAD
+[3.0.5]: https://github.com/soulteary/forwardauth-kit/compare/v3.0.4...v3.0.5
 [3.0.3]: https://github.com/soulteary/forwardauth-kit/compare/v3.0.2...v3.0.3
 [3.0.0]: https://github.com/soulteary/forwardauth-kit/compare/v2.2.0...v3.0.0
 [2.2.0]: https://github.com/soulteary/forwardauth-kit/compare/v2.1.0...v2.2.0
