@@ -7,9 +7,9 @@
     "skipped": 0
   },
   "coverage": {
-    "covered_statements": 667,
-    "total_statements": 685,
-    "percentage": 97.37,
+    "covered_statements": 656,
+    "total_statements": 672,
+    "percentage": 97.62,
     "threshold": 0
   },
   "packages": [
@@ -18,7 +18,7 @@
       "status": "pass",
       "tests": 130,
       "failed": 0,
-      "coverage": 97.09
+      "coverage": 97.38
     },
     {
       "name": "fiberadapter",
