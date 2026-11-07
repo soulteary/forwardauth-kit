@@ -36,6 +36,11 @@
 //
 //	mux.Handle("/_auth", httpadapter.CheckRoute(handler, nil))
 //
+// This snippet wires the endpoint only. With SessionEnabled as the sole
+// authentication method and a nil store, no request can authenticate. Supply a
+// [SessionStoreFunc] backed by sessions populated by the application's login
+// flow, or configure a password or trusted-header checker before using a nil store.
+//
 // Call [Config.Validate] at startup. [NewHandler] does not, so a configuration
 // that enables header authentication without declaring whether the identity
 // headers can be trusted builds a Handler that refuses every such request at
