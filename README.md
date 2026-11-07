@@ -79,13 +79,18 @@ func main() {
     handler := forwardauth.NewHandler(&config)
 
     mux := http.NewServeMux()
-    // nil store: no session, the request is judged on its headers. Pass a
-    // forwardauth.SessionStoreFunc to plug in a session library.
+    // Wiring example: with only SessionEnabled and a nil store, requests
+    // cannot authenticate. Pass a SessionStoreFunc backed by your session library.
     mux.Handle("/_auth", httpadapter.CheckRoute(handler, nil))
 
     http.ListenAndServe(":3000", mux)
 }
 ```
+
+For session authentication, the store must return a session populated by your
+login flow. A nil store is usable when a separate password or trusted-header
+checker is configured; neither is enabled in this wiring example. The login
+handler and session storage are application responsibilities.
 
 `httpadapter` covers Echo, Gin and chi as it stands: all three hand out an
 `http.ResponseWriter` and an `*http.Request`, which is what `httpadapter.NewContext`

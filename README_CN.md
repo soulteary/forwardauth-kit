@@ -75,13 +75,17 @@ func main() {
     handler := forwardauth.NewHandler(&config)
 
     mux := http.NewServeMux()
-    // store 传 nil 表示不使用 session，仅依据请求头判定。
-    // 需要接入 session 库时，传入 forwardauth.SessionStoreFunc。
+    // 此处只演示接线：仅启用 SessionEnabled 且 store 为 nil 时，请求无法通过认证。
+    // 请传入由实际 session 库支持的 forwardauth.SessionStoreFunc。
     mux.Handle("/_auth", httpadapter.CheckRoute(handler, nil))
 
     http.ListenAndServe(":3000", mux)
 }
 ```
+
+使用 session 认证时，store 必须返回由登录流程写入的 session。单独配置密码或可信请求头
+检查器时可以使用 nil store，但本接线示例没有启用这两者。登录处理器和 session 存储由
+应用负责提供。
 
 `httpadapter` 同样适用于 Echo、Gin 和 chi：这三者都能拿到
 `http.ResponseWriter` 与 `*http.Request`，正是 `httpadapter.NewContext` 所需要的。
