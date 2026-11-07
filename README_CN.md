@@ -309,9 +309,11 @@ if result.AuthRefreshFailed {
 | `X-Auth-Role` | 用户角色 | `admin` |
 | `X-Auth-AMR` | 使用的认证方法 | `otp,mfa` |
 
-输出的 header 值经过净化：CR 和 LF 会被剥掉，含逗号的 scope 或 AMR 值会被丢弃而不是
-输出——`X-Auth-Scopes` 是逗号分隔的，像 `read,admin` 这样的 scope 否则会在下游凭空
-多出一项权限。读回 header 请用 `ParseScopesFromHeader`。
+标量身份值如果含有 CR、LF 或 NUL，会被省略，而不是删除字符后输出。用户 ID 为空或
+被拒绝时，主用户 header 仍输出 `"authenticated"`，但省略 auth-user header
+（默认为 `X-Auth-User`）。scope 和 AMR 中含这些字符或逗号的项会被丢弃；其余项会去掉
+首尾空白，空项也会被丢弃。`X-Auth-Scopes` 用逗号分隔，所以 `read,admin` 这样的 scope
+否则会在下游多出一项权限。读回 header 请用 `ParseScopesFromHeader`。
 
 ## 认证结果
 

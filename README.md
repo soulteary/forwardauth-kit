@@ -324,10 +324,13 @@ On successful authentication, the following headers are set:
 | `X-Auth-Role` | User role | `admin` |
 | `X-Auth-AMR` | Authentication methods used | `otp,mfa` |
 
-Emitted header values are sanitised: CR and LF are stripped, and a scope or AMR
-value containing a comma is dropped rather than emitted — `X-Auth-Scopes` is
-comma-separated, so a scope like `read,admin` would otherwise mint an extra
-permission downstream. Parse the header back with `ParseScopesFromHeader`.
+Scalar identity values containing CR, LF or NUL are omitted rather than repaired.
+An empty or rejected user ID still emits `"authenticated"` in the primary user
+header, but omits the auth-user header (`X-Auth-User` by default). Scope and AMR
+entries containing those characters or a comma are dropped; remaining entries
+are trimmed and empty entries are dropped. `X-Auth-Scopes` is comma-separated,
+so a scope like `read,admin` would otherwise mint an extra permission downstream.
+Parse the header back with `ParseScopesFromHeader`.
 
 ## Auth Result
 
