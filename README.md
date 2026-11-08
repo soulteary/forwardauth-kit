@@ -258,7 +258,6 @@ handler := forwardauth.NewHandler(&config)
 ```go
 config := forwardauth.Config{
     SessionEnabled:      true,
-    HeaderAuthEnabled:   true,
     AuthRefreshEnabled:  true,
     AuthRefreshInterval: 5 * time.Minute,
     HeaderAuthGetInfoFunc: func(phone, mail string) *forwardauth.UserInfo {
@@ -267,8 +266,15 @@ config := forwardauth.Config{
     },
 }
 
+if err := config.Validate(); err != nil {
+    panic(err)
+}
 handler := forwardauth.NewHandler(&config)
 ```
+
+A session refresh uses the stored phone/mail and the lookup callback; it does
+not require header authentication. Enabling header authentication separately
+also requires its check callback and an explicit header-trust decision.
 
 A refresh **replaces** the cached scopes and role rather than merging into them,
 so revoking a user's scopes to none, or clearing their role, takes effect. When

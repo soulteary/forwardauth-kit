@@ -242,7 +242,6 @@ handler := forwardauth.NewHandler(&config)
 ```go
 config := forwardauth.Config{
     SessionEnabled:      true,
-    HeaderAuthEnabled:   true,
     AuthRefreshEnabled:  true,
     AuthRefreshInterval: 5 * time.Minute,
     HeaderAuthGetInfoFunc: func(phone, mail string) *forwardauth.UserInfo {
@@ -251,8 +250,14 @@ config := forwardauth.Config{
     },
 }
 
+if err := config.Validate(); err != nil {
+    panic(err)
+}
 handler := forwardauth.NewHandler(&config)
 ```
+
+session 刷新使用会话中保存的 phone/mail 和查询回调，不要求启用请求头认证。
+如果另外启用请求头认证，还须配置其检查回调，并明确决定哪些请求头可信。
 
 刷新会**替换**缓存的 scopes 和 role，而不是合并进去，因此把用户的 scopes 撤销为空、
 或清掉 role，都能真正生效。当 `HeaderAuthGetInfoFunc` 返回 `nil` 时，缓存的 scopes
