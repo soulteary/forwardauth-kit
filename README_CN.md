@@ -141,7 +141,10 @@ handler := forwardauth.NewHandler(&config)
 提供归一化函数：
 
 ```go
-config.PasswordNormalizer = strings.TrimSpace // 或 nil 表示不做归一化
+// 按需要选择一种：
+config.PasswordNormalizer = strings.TrimSpace // 仅去掉首尾空白
+// 要保留所有字符，请显式使用恒等函数。nil 会选择默认的大写/去空格行为。
+config.PasswordNormalizer = func(password string) string { return password }
 ```
 
 要对哈希校验而不是比对明文列表，请用 `PasswordCheckFunc`：

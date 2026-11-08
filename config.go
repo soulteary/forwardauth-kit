@@ -20,9 +20,9 @@ type Config struct {
 	// previously documented as; PasswordCheckFunc is the hook for verifying
 	// against hashes.
 	ValidPasswords     []string
-	PasswordAlgorithm  string // Algorithm: "plaintext", "bcrypt", "argon2"
+	PasswordAlgorithm  string // Metadata only; the checker does not select a hashing algorithm from this field. Use PasswordCheckFunc for hash verification.
 	PasswordCheckFunc  PasswordCheckFunc
-	PasswordNormalizer func(password string) string // Optional password normalizer
+	PasswordNormalizer func(password string) string // Used for ValidPasswords; nil selects uppercase/space removal. PasswordCheckFunc receives the raw value instead.
 
 	// Header-based authentication (e.g., Warden)
 	//

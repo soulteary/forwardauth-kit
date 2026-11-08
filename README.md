@@ -148,7 +148,11 @@ It is shaped for invite and access codes (`"ABCD 1234"`), not for passwords.
 For real passwords, supply your own:
 
 ```go
-config.PasswordNormalizer = strings.TrimSpace // or nil for no normalization
+// Choose one:
+config.PasswordNormalizer = strings.TrimSpace // remove leading/trailing whitespace only
+// To preserve every character, provide an identity function. A nil normalizer
+// selects the default uppercase/space-removal behavior.
+config.PasswordNormalizer = func(password string) string { return password }
 ```
 
 To verify against hashes instead of a plaintext list, use `PasswordCheckFunc`:

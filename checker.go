@@ -53,8 +53,8 @@ func (c *PasswordChecker) Check(ctx Context, sess Session) (*AuthResult, error) 
 		// This is shaped for invite/access codes ("ABCD 1234"), not for
 		// passwords: upper-casing makes the comparison case-insensitive, which
 		// throws away entropy the caller may believe it has. Supply
-		// PasswordNormalizer (strings.TrimSpace, or nothing at all) for real
-		// passwords. Note that ValidPasswords must be stored already
+		// PasswordNormalizer (strings.TrimSpace, or an identity function) for real
+		// passwords. A nil normalizer selects this default. ValidPasswords must be stored already
 		// normalized, or nothing will ever match.
 		normalizedPassword = strings.ToUpper(strings.TrimSpace(password))
 		normalizedPassword = strings.ReplaceAll(normalizedPassword, " ", "")
