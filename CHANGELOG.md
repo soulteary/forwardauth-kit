@@ -10,6 +10,21 @@ also changes the module path. The current one is
 
 ## [Unreleased]
 
+## [3.0.6] — 2026-11-13
+
+### Changed
+
+- Require Go 1.27.4, which carries security fixes to cgo, the go command, the
+  compiler, the linker and `net/http`.
+
+### Documentation
+
+- Describe rejected authentication header values, session store requirements
+  in the HTTP examples and password checker configuration behavior.
+- Make the session refresh example validate independently.
+
+The module path and the public API are unchanged.
+
 ## [3.0.5] — 2026-11-01
 
 ### Changed
@@ -232,7 +247,8 @@ also changes the module path. The current one is
 - Fiber v3. Applications still on Fiber v2 should stay on
   `github.com/soulteary/forwardauth-kit` v1.
 
-[Unreleased]: https://github.com/soulteary/forwardauth-kit/compare/v3.0.5...HEAD
+[Unreleased]: https://github.com/soulteary/forwardauth-kit/compare/v3.0.6...HEAD
+[3.0.6]: https://github.com/soulteary/forwardauth-kit/compare/v3.0.5...v3.0.6
 [3.0.5]: https://github.com/soulteary/forwardauth-kit/compare/v3.0.4...v3.0.5
 [3.0.3]: https://github.com/soulteary/forwardauth-kit/compare/v3.0.2...v3.0.3
 [3.0.0]: https://github.com/soulteary/forwardauth-kit/compare/v2.2.0...v3.0.0
