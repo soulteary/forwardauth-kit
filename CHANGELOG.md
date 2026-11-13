@@ -10,6 +10,15 @@ also changes the module path. The current one is
 
 ## [Unreleased]
 
+## [3.0.7] — 2026-11-13
+
+### Changed
+
+- Update `github.com/gofiber/fiber/v3` from v3.6.1 to v3.7.0. An application
+  that selects this release is moved to Fiber v3.7.0 or later.
+
+The module path and the public API are unchanged.
+
 ## [3.0.6] — 2026-11-13
 
 ### Changed
@@ -247,7 +256,8 @@ The module path and the public API are unchanged.
 - Fiber v3. Applications still on Fiber v2 should stay on
   `github.com/soulteary/forwardauth-kit` v1.
 
-[Unreleased]: https://github.com/soulteary/forwardauth-kit/compare/v3.0.6...HEAD
+[Unreleased]: https://github.com/soulteary/forwardauth-kit/compare/v3.0.7...HEAD
+[3.0.7]: https://github.com/soulteary/forwardauth-kit/compare/v3.0.6...v3.0.7
 [3.0.6]: https://github.com/soulteary/forwardauth-kit/compare/v3.0.5...v3.0.6
 [3.0.5]: https://github.com/soulteary/forwardauth-kit/compare/v3.0.4...v3.0.5
 [3.0.3]: https://github.com/soulteary/forwardauth-kit/compare/v3.0.2...v3.0.3
