@@ -10,6 +10,21 @@ also changes the module path. The current one is
 
 ## [Unreleased]
 
+Candidate: v3.0.8 (not yet released).
+
+### Changed
+
+- Update `github.com/gofiber/schema` from v1.9.3 to v1.10.0.
+- Update `github.com/gofiber/utils/v2` from v2.6.4 to v2.6.5.
+- Update `github.com/klauspost/compress` from v1.20.3 to v1.20.5.
+- Update `github.com/valyala/fasthttp` from v1.78.0 to v1.80.0.
+- Update `golang.org/x/crypto` from v0.58.0 to v0.59.0.
+- Update `golang.org/x/net` from v0.62.0 to v0.63.0.
+- Update `golang.org/x/sys` from v0.49.0 to v0.50.0.
+- Update `golang.org/x/text` from v0.43.0 to v0.44.0.
+
+The module path and the public API are unchanged. The minimum Go version remains 1.27.4.
+
 ## [3.0.7] — 2026-11-13
 
 ### Changed
