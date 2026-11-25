@@ -10,7 +10,21 @@ also changes the module path. The current one is
 
 ## [Unreleased]
 
-Candidate: v3.0.8 (not yet released).
+## [3.0.9] - 2026-11-26
+
+### Changed
+
+- Update the indirect Fiber adapter dependency `github.com/gofiber/schema`
+  from v1.10.0 to v1.10.2.
+- Refresh GitHub Actions dependencies used by CI and release validation.
+
+The module path, public API and Go 1.27.4 requirement are unchanged.
+Fiber remains in the optional adapter; this patch does not add Fiber
+to the root package imports.
+
+
+## [3.0.8] - 2026-11-24
+
 
 ### Changed
 
